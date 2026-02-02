@@ -1,4 +1,8 @@
 use bevy::prelude::*;
+use bevy::render::render_resource::{
+    Extent3d, RenderAssetUsages, TextureDimension, TextureFormat,
+};
+use bevy::render::texture::ImageSampler;
 use std::time::Instant;
 
 // ------------------------------------
@@ -261,6 +265,19 @@ struct RenderDiag {
 }
 
 // ------------------------------------
+// Heatmap rendering
+// ------------------------------------
+
+#[derive(Resource)]
+struct HeatmapSettings {
+    image: Handle<Image>,
+    min_pressure: f32,
+    max_pressure: f32,
+    scale: f32,
+    last_tick: u64,
+}
+
+// ------------------------------------
 // UI
 // ------------------------------------
 
@@ -285,7 +302,7 @@ impl Plugin for PressureDiffusionPlugin {
                 RunFixedMainLoop,
                 build_presented_state.in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
             )
-            .add_systems(Update, (update_ui, render_diagnostics));
+            .add_systems(Update, (update_heatmap, update_ui, render_diagnostics));
     }
 }
 
@@ -293,6 +310,7 @@ fn setup(
     mut commands: Commands,
     grid: Res<GridSettings>,
     gases: Res<GasCatalog>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     // Camera + UI
     commands.spawn(Camera2d);
@@ -351,6 +369,36 @@ fn setup(
     commands.insert_resource(presented);
     commands.insert_resource(SimDiag::default());
     commands.insert_resource(RenderDiag::default());
+
+    let heatmap_scale = 4.0;
+    let size = Extent3d {
+        width: grid.width,
+        height: grid.height,
+        depth_or_array_layers: 1,
+    };
+    let mut image = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::nearest();
+    let image_handle = images.add(image);
+
+    commands.spawn(SpriteBundle {
+        texture: image_handle.clone(),
+        transform: Transform::from_scale(Vec3::splat(heatmap_scale)),
+        ..default()
+    });
+
+    commands.insert_resource(HeatmapSettings {
+        image: image_handle,
+        min_pressure: 0.0,
+        max_pressure: 15.0,
+        scale: heatmap_scale,
+        last_tick: 0,
+    });
 }
 
 // ------------------------------------
@@ -479,6 +527,38 @@ fn build_presented_state(
 // UI: Update (vsync)
 // ------------------------------------
 
+fn update_heatmap(
+    presented: Res<PressurePresented>,
+    mut images: ResMut<Assets<Image>>,
+    mut heatmap: ResMut<HeatmapSettings>,
+) {
+    if presented.tick == heatmap.last_tick {
+        return;
+    }
+    heatmap.last_tick = presented.tick;
+
+    let Some(image) = images.get_mut(&heatmap.image) else {
+        return;
+    };
+    let Some(data) = image.data.as_mut() else {
+        return;
+    };
+
+    let min = heatmap.min_pressure;
+    let max = heatmap.max_pressure;
+    let range = (max - min).max(f32::EPSILON);
+
+    for (i, &pressure) in presented.pressure.iter().enumerate() {
+        let t = ((pressure - min) / range).clamp(0.0, 1.0);
+        let color = pressure_to_color(t);
+        let idx = i * 4;
+        data[idx] = (color.x * 255.0) as u8;
+        data[idx + 1] = (color.y * 255.0) as u8;
+        data[idx + 2] = (color.z * 255.0) as u8;
+        data[idx + 3] = 255;
+    }
+}
+
 fn update_ui(
     gases: Res<GasCatalog>,
     presented: Res<PressurePresented>,
@@ -525,6 +605,23 @@ fn update_ui(
             presented.center_total_moles,
             comp
         ));
+    }
+}
+
+fn pressure_to_color(t: f32) -> Vec3 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.25 {
+        let k = t / 0.25;
+        Vec3::new(0.0, k, 1.0)
+    } else if t < 0.5 {
+        let k = (t - 0.25) / 0.25;
+        Vec3::new(0.0, 1.0, 1.0 - k)
+    } else if t < 0.75 {
+        let k = (t - 0.5) / 0.25;
+        Vec3::new(k, 1.0, 0.0)
+    } else {
+        let k = (t - 0.75) / 0.25;
+        Vec3::new(1.0, 1.0 - k, 0.0)
     }
 }
 
