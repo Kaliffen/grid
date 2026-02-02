@@ -128,11 +128,11 @@ pub(crate) fn setup_sim(mut commands: Commands, grid: Res<GridSettings>, gases: 
 
     if let Some(i) = o2_i {
         let k = sim.idx(i, c);
-        sim.curr_moles[k] = 1240.0;
+        sim.curr_moles[k] = 1.0;
     }
     if let Some(i) = ch4_i {
         let k = sim.idx(i, c);
-        sim.curr_moles[k] = 5.0;
+        sim.curr_moles[k] = 1.0;
     }
 
     // Keep prev equal initially (avoid a weird first-frame lerp)

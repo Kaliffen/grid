@@ -144,7 +144,7 @@ impl Default for GridSettings {
     fn default() -> Self {
         Self {
             width: 64,
-            height: 64,
+            height: 64    ,
             gas_constant: 8.314,
             temperature: 293.15,
             cell_volume: 1.0,
