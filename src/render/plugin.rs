@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 
 use crate::render::systems::{
-    render_diagnostics, setup_render, update_heatmap_texture, update_overlay_mode_input, update_ui,
+    render_diagnostics, setup_render, update_heatmap_texture, update_overlay_mode_input,
+    update_selected_tile_input, update_ui,
 };
 use crate::sim::systems::setup_sim;
 
@@ -14,6 +15,7 @@ impl Plugin for PressureRenderPlugin {
                 Update,
                 (
                     update_overlay_mode_input,
+                    update_selected_tile_input,
                     update_ui,
                     update_heatmap_texture,
                     render_diagnostics,
