@@ -444,10 +444,11 @@ pub(crate) fn build_presented_state(
         presented.pressure[cell_i] = total * grid.gas_constant * grid.temperature * inv_volume;
     }
 
-    // Build a per-cell wind vector from the current pressure-driven fluxes.
+    // Build a per-cell wind vector from the interpolated pressure field.
     let width = sim.width;
     let height = sim.height;
     let mut max_wind_sq: f32 = 0.0;
+    let wind_relax = grid.wind_visual_relax.clamp(0.0, 1.0);
     for y in 0..height {
         for x in 0..width {
             let mut wind_x = 0.0;
@@ -457,22 +458,30 @@ pub(crate) fn build_presented_state(
 
             if width > 1 {
                 if x > 0 {
-                    wind_x += sim.flux_x[sim.flux_x_index(x - 1, y)];
+                    let left = sim.cell_index(x - 1, y);
+                    let curr = sim.cell_index(x, y);
+                    wind_x += grid.bulk_flow_k * (presented.pressure[left] - presented.pressure[curr]);
                     count_x += 1.0;
                 }
                 if x + 1 < width {
-                    wind_x += sim.flux_x[sim.flux_x_index(x, y)];
+                    let curr = sim.cell_index(x, y);
+                    let right = sim.cell_index(x + 1, y);
+                    wind_x += grid.bulk_flow_k * (presented.pressure[curr] - presented.pressure[right]);
                     count_x += 1.0;
                 }
             }
 
             if height > 1 {
                 if y > 0 {
-                    wind_y += sim.flux_y[sim.flux_y_index(x, y - 1)];
+                    let top = sim.cell_index(x, y - 1);
+                    let curr = sim.cell_index(x, y);
+                    wind_y += grid.bulk_flow_k * (presented.pressure[top] - presented.pressure[curr]);
                     count_y += 1.0;
                 }
                 if y + 1 < height {
-                    wind_y += sim.flux_y[sim.flux_y_index(x, y)];
+                    let curr = sim.cell_index(x, y);
+                    let bottom = sim.cell_index(x, y + 1);
+                    wind_y += grid.bulk_flow_k * (presented.pressure[curr] - presented.pressure[bottom]);
                     count_y += 1.0;
                 }
             }
@@ -485,8 +494,10 @@ pub(crate) fn build_presented_state(
             }
 
             let idx = sim.cell_index(x, y);
-            presented.wind[idx] = Vec2::new(wind_x, wind_y);
-            max_wind_sq = max_wind_sq.max(wind_x * wind_x + wind_y * wind_y);
+            let target = Vec2::new(wind_x, wind_y);
+            let smoothed = presented.wind[idx].lerp(target, wind_relax);
+            presented.wind[idx] = smoothed;
+            max_wind_sq = max_wind_sq.max(smoothed.length_squared());
         }
     }
     presented.max_wind_speed = max_wind_sq.sqrt();
