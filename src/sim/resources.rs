@@ -176,6 +176,8 @@ pub(crate) struct PressureSimState {
     pub(crate) pressure_curr: Vec<f32>,
     pub(crate) flux_x: Vec<f32>,
     pub(crate) flux_y: Vec<f32>,
+    pub(crate) edges_x: Vec<(usize, usize)>,
+    pub(crate) edges_y: Vec<(usize, usize)>,
 }
 
 impl PressureSimState {
@@ -184,6 +186,30 @@ impl PressureSimState {
         let total_len = gas_count * cell_count;
         let flux_x_len = ((width - 1) * height) as usize;
         let flux_y_len = (width * (height - 1)) as usize;
+        let mut edges_x = Vec::with_capacity(flux_x_len);
+        let mut edges_y = Vec::with_capacity(flux_y_len);
+
+        if width > 1 {
+            for y in 0..height {
+                let row = y * width;
+                for x in 0..(width - 1) {
+                    let left = (row + x) as usize;
+                    let right = left + 1;
+                    edges_x.push((left, right));
+                }
+            }
+        }
+
+        if height > 1 {
+            for y in 0..(height - 1) {
+                let row = y * width;
+                for x in 0..width {
+                    let top = (row + x) as usize;
+                    let bottom = top + width as usize;
+                    edges_y.push((top, bottom));
+                }
+            }
+        }
 
         Self {
             tick: 0,
@@ -198,6 +224,8 @@ impl PressureSimState {
             pressure_curr: vec![0.0; cell_count],
             flux_x: vec![0.0; flux_x_len],
             flux_y: vec![0.0; flux_y_len],
+            edges_x,
+            edges_y,
         }
     }
 

@@ -91,12 +91,8 @@ pub(crate) fn advance_diffusion_fixed(
     sim.tick += 1;
 
     let dt = fixed_time.delta_secs();
-    let w = sim.width;
-    let h = sim.height;
-    let cell_count = sim.cell_count; 
+    let cell_count = sim.cell_count;
     let gas_count = sim.gas_count;
-    let width_usize = w as usize;
-    let height_usize = h as usize;
 
     // Compute total moles and pressure per cell (ideal gas law).
     sim.total_moles_curr.fill(0.0);
@@ -133,53 +129,40 @@ pub(crate) fn advance_diffusion_fixed(
         }
     }
 
-    // Compute bulk-flow fluxes from pressure gradients.
+    // Compute bulk-flow fluxes from pressure gradients (edge-based).
     {
         let PressureSimState {
             pressure_curr,
             flux_x,
             flux_y,
+            edges_x,
+            edges_y,
             ..
         } = &mut *sim;
-        if w > 1 {
-            for y in 0..height_usize {
-                let row = y * width_usize;
-                let flux_row = y * (width_usize - 1);
-                for x in 0..(width_usize - 1) {
-                    let left = row + x;
-                    let right = left + 1;
-                    let p_left = pressure_curr[left];
-                    let p_right = pressure_curr[right];
-                    let flux = grid.bulk_flow_k * (p_left - p_right);
-                    flux_x[flux_row + x] = flux;
-                }
-            }
+
+        for (edge_i, (left, right)) in edges_x.iter().enumerate() {
+            let p_left = pressure_curr[*left];
+            let p_right = pressure_curr[*right];
+            flux_x[edge_i] = grid.bulk_flow_k * (p_left - p_right);
         }
 
-        if h > 1 {
-            for y in 0..(height_usize - 1) {
-                let row = y * width_usize;
-                let row_down = row + width_usize;
-                for x in 0..width_usize {
-                    let top = row + x;
-                    let bottom = row_down + x;
-                    let p_top = pressure_curr[top];
-                    let p_bottom = pressure_curr[bottom];
-                    let flux = grid.bulk_flow_k * (p_top - p_bottom);
-                    flux_y[row + x] = flux;
-                }
-            }
+        for (edge_i, (top, bottom)) in edges_y.iter().enumerate() {
+            let p_top = pressure_curr[*top];
+            let p_bottom = pressure_curr[*bottom];
+            flux_y[edge_i] = grid.bulk_flow_k * (p_top - p_bottom);
         }
     }
 
     // Advection: move mixture along fluxes using upwind composition (curr state).
-    let (curr_moles, next_moles, total_moles_curr, flux_x, flux_y) = {
+    let (curr_moles, next_moles, total_moles_curr, flux_x, flux_y, edges_x, edges_y) = {
         let PressureSimState {
             curr_moles,
             next_moles,
             total_moles_curr,
             flux_x,
             flux_y,
+            edges_x,
+            edges_y,
             ..
         } = &mut *sim;
         (
@@ -188,62 +171,59 @@ pub(crate) fn advance_diffusion_fixed(
             total_moles_curr.as_slice(),
             flux_x.as_slice(),
             flux_y.as_slice(),
+            edges_x.as_slice(),
+            edges_y.as_slice(),
         )
     };
 
     next_moles.clone_from_slice(curr_moles);
 
     let mut outgoing = vec![0.0_f32; cell_count];
-    if w > 1 {
-        for y in 0..height_usize {
-            let row = y * width_usize;
-            let flux_row = y * (width_usize - 1);
-            for x in 0..(width_usize - 1) {
-                let flux = flux_x[flux_row + x];
-                let amount = flux.abs() * dt;
-                if amount <= 0.0 {
-                    continue;
-                }
+    for (edge_i, (left, right)) in edges_x.iter().enumerate() {
+        let flux = flux_x[edge_i];
+        let amount = flux.abs() * dt;
+        if amount <= 0.0 {
+            continue;
+        }
 
-                let (src_x, _) = if flux >= 0.0 { (x, x + 1) } else { (x + 1, x) };
-                let src = row + src_x;
-                let src_total = total_moles_curr[src];
-                if src_total <= 0.0 {
-                    continue;
-                }
+        let (src, _) = if flux >= 0.0 {
+            (*left, *right)
+        } else {
+            (*right, *left)
+        };
+        let src_total = total_moles_curr[src];
+        if src_total <= 0.0 {
+            continue;
+        }
 
-                let max_amount = src_total * grid.max_flow_fraction;
-                let desired = amount.min(max_amount);
-                if desired > 0.0 {
-                    outgoing[src] += desired;
-                }
-            }
+        let max_amount = src_total * grid.max_flow_fraction;
+        let desired = amount.min(max_amount);
+        if desired > 0.0 {
+            outgoing[src] += desired;
         }
     }
 
-    if h > 1 {
-        for y in 0..(height_usize - 1) {
-            let row = y * width_usize;
-            for x in 0..width_usize {
-                let flux = flux_y[row + x];
-                let amount = flux.abs() * dt;
-                if amount <= 0.0 {
-                    continue;
-                }
+    for (edge_i, (top, bottom)) in edges_y.iter().enumerate() {
+        let flux = flux_y[edge_i];
+        let amount = flux.abs() * dt;
+        if amount <= 0.0 {
+            continue;
+        }
 
-                let (src_y, _) = if flux >= 0.0 { (y, y + 1) } else { (y + 1, y) };
-                let src = src_y * width_usize + x;
-                let src_total = total_moles_curr[src];
-                if src_total <= 0.0 {
-                    continue;
-                }
+        let (src, _) = if flux >= 0.0 {
+            (*top, *bottom)
+        } else {
+            (*bottom, *top)
+        };
+        let src_total = total_moles_curr[src];
+        if src_total <= 0.0 {
+            continue;
+        }
 
-                let max_amount = src_total * grid.max_flow_fraction;
-                let desired = amount.min(max_amount);
-                if desired > 0.0 {
-                    outgoing[src] += desired;
-                }
-            }
+        let max_amount = src_total * grid.max_flow_fraction;
+        let desired = amount.min(max_amount);
+        if desired > 0.0 {
+            outgoing[src] += desired;
         }
     }
 
@@ -257,76 +237,69 @@ pub(crate) fn advance_diffusion_fixed(
         }
     }
 
-    if w > 1 {
-        for y in 0..height_usize {
-            let row = y * width_usize;
-            let flux_row = y * (width_usize - 1);
-            for x in 0..(width_usize - 1) {
-                let flux = flux_x[flux_row + x];
-                let amount = flux.abs() * dt;
-                if amount <= 0.0 {
-                    continue;
-                }
+    for (edge_i, (left, right)) in edges_x.iter().enumerate() {
+        let flux = flux_x[edge_i];
+        let amount = flux.abs() * dt;
+        if amount <= 0.0 {
+            continue;
+        }
 
-                let (src_x, dst_x) = if flux >= 0.0 { (x, x + 1) } else { (x + 1, x) };
-                let src = row + src_x;
-                let dst = row + dst_x;
-                let src_total = total_moles_curr[src];
-                if src_total <= 0.0 {
-                    continue;
-                }
+        let (src, dst) = if flux >= 0.0 {
+            (*left, *right)
+        } else {
+            (*right, *left)
+        };
+        let src_total = total_moles_curr[src];
+        if src_total <= 0.0 {
+            continue;
+        }
 
-                let max_amount = src_total * grid.max_flow_fraction;
-                let transfer = amount.min(max_amount) * outgoing_scale[src];
-                if transfer <= 0.0 {
-                    continue;
-                }
+        let max_amount = src_total * grid.max_flow_fraction;
+        let transfer = amount.min(max_amount) * outgoing_scale[src];
+        if transfer <= 0.0 {
+            continue;
+        }
 
-                for gas_i in 0..gas_count {
-                    let k_src = gas_i * cell_count + src;
-                    let k_dst = gas_i * cell_count + dst;
-                    let frac = curr_moles[k_src] / src_total;
-                    let delta = transfer * frac;
-                    next_moles[k_src] -= delta;
-                    next_moles[k_dst] += delta;
-                }
-            }
+        for gas_i in 0..gas_count {
+            let k_src = gas_i * cell_count + src;
+            let k_dst = gas_i * cell_count + dst;
+            let frac = curr_moles[k_src] / src_total;
+            let delta = transfer * frac;
+            next_moles[k_src] -= delta;
+            next_moles[k_dst] += delta;
         }
     }
 
-    if h > 1 {
-        for y in 0..(height_usize - 1) {
-            let row = y * width_usize;
-            for x in 0..width_usize {
-                let flux = flux_y[row + x];
-                let amount = flux.abs() * dt;
-                if amount <= 0.0 {
-                    continue;
-                }
+    for (edge_i, (top, bottom)) in edges_y.iter().enumerate() {
+        let flux = flux_y[edge_i];
+        let amount = flux.abs() * dt;
+        if amount <= 0.0 {
+            continue;
+        }
 
-                let (src_y, dst_y) = if flux >= 0.0 { (y, y + 1) } else { (y + 1, y) };
-                let src = src_y * width_usize + x;
-                let dst = dst_y * width_usize + x;
-                let src_total = total_moles_curr[src];
-                if src_total <= 0.0 {
-                    continue;
-                }
+        let (src, dst) = if flux >= 0.0 {
+            (*top, *bottom)
+        } else {
+            (*bottom, *top)
+        };
+        let src_total = total_moles_curr[src];
+        if src_total <= 0.0 {
+            continue;
+        }
 
-                let max_amount = src_total * grid.max_flow_fraction;
-                let transfer = amount.min(max_amount) * outgoing_scale[src];
-                if transfer <= 0.0 {
-                    continue;
-                }
+        let max_amount = src_total * grid.max_flow_fraction;
+        let transfer = amount.min(max_amount) * outgoing_scale[src];
+        if transfer <= 0.0 {
+            continue;
+        }
 
-                for gas_i in 0..gas_count {
-                    let k_src = gas_i * cell_count + src;
-                    let k_dst = gas_i * cell_count + dst;
-                    let frac = curr_moles[k_src] / src_total;
-                    let delta = transfer * frac;
-                    next_moles[k_src] -= delta;
-                    next_moles[k_dst] += delta;
-                }
-            }
+        for gas_i in 0..gas_count {
+            let k_src = gas_i * cell_count + src;
+            let k_dst = gas_i * cell_count + dst;
+            let frac = curr_moles[k_src] / src_total;
+            let delta = transfer * frac;
+            next_moles[k_src] -= delta;
+            next_moles[k_dst] += delta;
         }
     }
 
@@ -341,113 +314,62 @@ pub(crate) fn advance_diffusion_fixed(
     }
 
     // Diffuse each gas independently (mixing is emergent from diffusion of moles).
-    for gas_i in 0..gas_count {
-        let alpha = gases.gases[gas_i].diffusion_alpha * grid.global_alpha;
-        if alpha == 0.0 || dt == 0.0 {
-            continue;
-        }
+    {
+        let PressureSimState {
+            curr_moles,
+            next_moles,
+            edges_x,
+            edges_y,
+            ..
+        } = &mut *sim;
+        let edges_x = edges_x.as_slice();
+        let edges_y = edges_y.as_slice();
 
-        let (curr, next) = {
-            let PressureSimState {
-                curr_moles,
-                next_moles,
-                ..
-            } = &mut *sim;
+        for gas_i in 0..gas_count {
+            let alpha = gases.gases[gas_i].diffusion_alpha * grid.global_alpha;
+            if alpha == 0.0 || dt == 0.0 {
+                continue;
+            }
+
             let base = gas_i * cell_count;
-            (
-                &curr_moles[base..base + cell_count],
-                &mut next_moles[base..base + cell_count],
-            )
-        };
-        next.copy_from_slice(curr);
+            let curr = &curr_moles[base..base + cell_count];
+            let next = &mut next_moles[base..base + cell_count];
+            next.copy_from_slice(curr);
 
-        let mut desired_out = vec![0.0_f32; cell_count];
+            let mut desired_out = vec![0.0_f32; cell_count];
 
-        if w > 1 {
-            for y in 0..height_usize {
-                let row = y * width_usize;
-                for x in 0..(width_usize - 1) {
-                    let a = row + x;
-                    let b = a + 1;
-                    let diff = curr[b] - curr[a];
-                    let delta = alpha * dt * diff;
-                    if delta > 0.0 {
-                        desired_out[b] += delta;
-                    } else if delta < 0.0 {
-                        desired_out[a] += -delta;
+            for (a, b) in edges_x.iter().chain(edges_y.iter()) {
+                let diff = curr[*b] - curr[*a];
+                let delta = alpha * dt * diff;
+                if delta > 0.0 {
+                    desired_out[*b] += delta;
+                } else if delta < 0.0 {
+                    desired_out[*a] += -delta;
+                }
+            }
+
+            let mut scale = vec![1.0_f32; cell_count];
+            for cell_i in 0..cell_count {
+                let out = desired_out[cell_i];
+                if out > 0.0 {
+                    let available = curr[cell_i];
+                    if out > available {
+                        scale[cell_i] = available / out;
                     }
                 }
             }
-        }
 
-        if h > 1 {
-            for y in 0..(height_usize - 1) {
-                let row = y * width_usize;
-                let row_down = row + width_usize;
-                for x in 0..width_usize {
-                    let a = row + x;
-                    let b = row_down + x;
-                    let diff = curr[b] - curr[a];
-                    let delta = alpha * dt * diff;
-                    if delta > 0.0 {
-                        desired_out[b] += delta;
-                    } else if delta < 0.0 {
-                        desired_out[a] += -delta;
-                    }
-                }
-            }
-        }
-
-        let mut scale = vec![1.0_f32; cell_count];
-        for cell_i in 0..cell_count {
-            let out = desired_out[cell_i];
-            if out > 0.0 {
-                let available = curr[cell_i];
-                if out > available {
-                    scale[cell_i] = available / out;
-                }
-            }
-        }
-
-        if w > 1 {
-            for y in 0..height_usize {
-                let row = y * width_usize;
-                for x in 0..(width_usize - 1) {
-                    let a = row + x;
-                    let b = a + 1;
-                    let diff = curr[b] - curr[a];
-                    let delta = alpha * dt * diff;
-                    if delta > 0.0 {
-                        let scaled = delta * scale[b];
-                        next[a] += scaled;
-                        next[b] -= scaled;
-                    } else if delta < 0.0 {
-                        let scaled = delta * scale[a];
-                        next[a] += scaled;
-                        next[b] -= scaled;
-                    }
-                }
-            }
-        }
-
-        if h > 1 {
-            for y in 0..(height_usize - 1) {
-                let row = y * width_usize;
-                let row_down = row + width_usize;
-                for x in 0..width_usize {
-                    let a = row + x;
-                    let b = row_down + x;
-                    let diff = curr[b] - curr[a];
-                    let delta = alpha * dt * diff;
-                    if delta > 0.0 {
-                        let scaled = delta * scale[b];
-                        next[a] += scaled;
-                        next[b] -= scaled;
-                    } else if delta < 0.0 {
-                        let scaled = delta * scale[a];
-                        next[a] += scaled;
-                        next[b] -= scaled;
-                    }
+            for (a, b) in edges_x.iter().chain(edges_y.iter()) {
+                let diff = curr[*b] - curr[*a];
+                let delta = alpha * dt * diff;
+                if delta > 0.0 {
+                    let scaled = delta * scale[*b];
+                    next[*a] += scaled;
+                    next[*b] -= scaled;
+                } else if delta < 0.0 {
+                    let scaled = delta * scale[*a];
+                    next[*a] += scaled;
+                    next[*b] -= scaled;
                 }
             }
         }
