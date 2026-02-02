@@ -204,6 +204,7 @@ pub(crate) fn update_heatmap_texture(
     presented: Res<PressurePresented>,
     mut heatmap: ResMut<HeatmapViz>,
     overlay: Res<OverlayMode>,
+    grid: Res<GridSettings>,
     mut images: ResMut<Assets<Image>>,
 ) {
     if presented.tick == heatmap.last_tick {
@@ -227,7 +228,10 @@ pub(crate) fn update_heatmap_texture(
         data.resize(expected_len, 0);
     }
 
-    let max_wind = presented.max_wind_speed.max(f32::EPSILON);
+    let max_wind = presented
+        .max_wind_speed
+        .max(grid.wind_visual_min_speed)
+        .max(f32::EPSILON);
     let inv_wind = 1.0 / max_wind;
 
     for y in 0..height {
