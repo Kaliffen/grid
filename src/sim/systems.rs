@@ -287,7 +287,7 @@ pub(crate) fn build_presented_state(
     // Build a per-cell wind vector from the current pressure-driven fluxes.
     let width = sim.width;
     let height = sim.height;
-    let mut max_wind_sq = 0.0;
+    let mut max_wind_sq: f32 = 0.0;
     for y in 0..height {
         for x in 0..width {
             let mut wind_x = 0.0;
