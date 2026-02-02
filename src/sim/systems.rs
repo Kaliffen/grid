@@ -92,14 +92,24 @@ pub(crate) fn advance_diffusion_fixed(
     let w = sim.width;
     let h = sim.height;
     let cell_count = sim.cell_count;
+    let gas_count = sim.gas_count;
+    let width_usize = w as usize;
+    let height_usize = h as usize;
 
     // Compute total moles and pressure per cell (ideal gas law).
     sim.total_moles_curr.fill(0.0);
-    for gas_i in 0..sim.gas_count {
-        let base = gas_i * cell_count;
-        let curr = &sim.curr_moles[base..base + cell_count];
-        for cell_i in 0..cell_count {
-            sim.total_moles_curr[cell_i] += curr[cell_i];
+    {
+        let PressureSimState {
+            curr_moles,
+            total_moles_curr,
+            ..
+        } = &mut *sim;
+        for gas_i in 0..gas_count {
+            let base = gas_i * cell_count;
+            let curr = &curr_moles[base..base + cell_count];
+            for cell_i in 0..cell_count {
+                total_moles_curr[cell_i] += curr[cell_i];
+            }
         }
     }
 
@@ -109,62 +119,93 @@ pub(crate) fn advance_diffusion_fixed(
         0.0
     };
     sim.pressure_curr.fill(0.0);
-    for cell_i in 0..cell_count {
-        let total = sim.total_moles_curr[cell_i];
-        sim.pressure_curr[cell_i] = total * grid.gas_constant * grid.temperature * inv_volume;
-    }
-
-    // Compute bulk-flow fluxes from pressure gradients.
-    if w > 1 {
-        for y in 0..h {
-            for x in 0..(w - 1) {
-                let left = sim.cell_index(x, y);
-                let right = sim.cell_index(x + 1, y);
-                let p_left = sim.pressure_curr[left];
-                let p_right = sim.pressure_curr[right];
-                let flux = grid.bulk_flow_k * (p_left - p_right);
-                let k = sim.flux_x_index(x, y);
-                sim.flux_x[k] = flux;
-            }
+    {
+        let PressureSimState {
+            total_moles_curr,
+            pressure_curr,
+            ..
+        } = &mut *sim;
+        for cell_i in 0..cell_count {
+            let total = total_moles_curr[cell_i];
+            pressure_curr[cell_i] = total * grid.gas_constant * grid.temperature * inv_volume;
         }
     }
 
-    if h > 1 {
-        for y in 0..(h - 1) {
-            for x in 0..w {
-                let top = sim.cell_index(x, y);
-                let bottom = sim.cell_index(x, y + 1);
-                let p_top = sim.pressure_curr[top];
-                let p_bottom = sim.pressure_curr[bottom];
-                let flux = grid.bulk_flow_k * (p_top - p_bottom);
-                let k = sim.flux_y_index(x, y);
-                sim.flux_y[k] = flux;
+    // Compute bulk-flow fluxes from pressure gradients.
+    {
+        let PressureSimState {
+            pressure_curr,
+            flux_x,
+            flux_y,
+            ..
+        } = &mut *sim;
+        if w > 1 {
+            for y in 0..height_usize {
+                let row = y * width_usize;
+                let flux_row = y * (width_usize - 1);
+                for x in 0..(width_usize - 1) {
+                    let left = row + x;
+                    let right = left + 1;
+                    let p_left = pressure_curr[left];
+                    let p_right = pressure_curr[right];
+                    let flux = grid.bulk_flow_k * (p_left - p_right);
+                    flux_x[flux_row + x] = flux;
+                }
+            }
+        }
+
+        if h > 1 {
+            for y in 0..(height_usize - 1) {
+                let row = y * width_usize;
+                let row_down = row + width_usize;
+                for x in 0..width_usize {
+                    let top = row + x;
+                    let bottom = row_down + x;
+                    let p_top = pressure_curr[top];
+                    let p_bottom = pressure_curr[bottom];
+                    let flux = grid.bulk_flow_k * (p_top - p_bottom);
+                    flux_y[row + x] = flux;
+                }
             }
         }
     }
 
     // Advection: move mixture along fluxes using upwind composition (curr state).
-    let (curr_moles, next_moles) = {
-        let s = &mut *sim;
-        (&s.curr_moles, &mut s.next_moles)
+    let (curr_moles, next_moles, total_moles_curr, flux_x, flux_y) = {
+        let PressureSimState {
+            curr_moles,
+            next_moles,
+            total_moles_curr,
+            flux_x,
+            flux_y,
+            ..
+        } = &mut *sim;
+        (
+            curr_moles.as_slice(),
+            next_moles.as_mut_slice(),
+            total_moles_curr.as_slice(),
+            flux_x.as_slice(),
+            flux_y.as_slice(),
+        )
     };
 
     next_moles.clone_from(curr_moles);
 
     let mut outgoing = vec![0.0_f32; cell_count];
     if w > 1 {
-        for y in 0..h {
-            let row = (y * w) as usize;
-            for x in 0..(w - 1) {
-                let flux = sim.flux_x[sim.flux_x_index(x, y)];
+        for y in 0..height_usize {
+            let row = y * width_usize;
+            let flux_row = y * (width_usize - 1);
+            for x in 0..(width_usize - 1) {
+                let flux = flux_x[flux_row + x];
                 let amount = flux.abs() * dt;
                 if amount <= 0.0 {
                     continue;
                 }
 
                 let (src_x, _) = if flux >= 0.0 { (x, x + 1) } else { (x + 1, x) };
-                let src = row + src_x as usize;
-                let src_total = sim.total_moles_curr[src];
+                let src = row + src_x;
+                let src_total = total_moles_curr[src];
                 if src_total <= 0.0 {
                     continue;
                 }
@@ -179,17 +220,18 @@ pub(crate) fn advance_diffusion_fixed(
     }
 
     if h > 1 {
-        for y in 0..(h - 1) {
-            for x in 0..w {
-                let flux = sim.flux_y[sim.flux_y_index(x, y)];
+        for y in 0..(height_usize - 1) {
+            let row = y * width_usize;
+            for x in 0..width_usize {
+                let flux = flux_y[row + x];
                 let amount = flux.abs() * dt;
                 if amount <= 0.0 {
                     continue;
                 }
 
                 let (src_y, _) = if flux >= 0.0 { (y, y + 1) } else { (y + 1, y) };
-                let src = (src_y * w + x) as usize;
-                let src_total = sim.total_moles_curr[src];
+                let src = src_y * width_usize + x;
+                let src_total = total_moles_curr[src];
                 if src_total <= 0.0 {
                     continue;
                 }
@@ -205,7 +247,7 @@ pub(crate) fn advance_diffusion_fixed(
 
     let mut outgoing_scale = vec![1.0_f32; cell_count];
     for cell_i in 0..cell_count {
-        let total = sim.total_moles_curr[cell_i];
+        let total = total_moles_curr[cell_i];
         let max_out = total * grid.max_flow_fraction;
         let out = outgoing[cell_i];
         if out > max_out && out > 0.0 {
@@ -214,19 +256,20 @@ pub(crate) fn advance_diffusion_fixed(
     }
 
     if w > 1 {
-        for y in 0..h {
-            let row = (y * w) as usize;
-            for x in 0..(w - 1) {
-                let flux = sim.flux_x[sim.flux_x_index(x, y)];
+        for y in 0..height_usize {
+            let row = y * width_usize;
+            let flux_row = y * (width_usize - 1);
+            for x in 0..(width_usize - 1) {
+                let flux = flux_x[flux_row + x];
                 let amount = flux.abs() * dt;
                 if amount <= 0.0 {
                     continue;
                 }
 
                 let (src_x, dst_x) = if flux >= 0.0 { (x, x + 1) } else { (x + 1, x) };
-                let src = row + src_x as usize;
-                let dst = row + dst_x as usize;
-                let src_total = sim.total_moles_curr[src];
+                let src = row + src_x;
+                let dst = row + dst_x;
+                let src_total = total_moles_curr[src];
                 if src_total <= 0.0 {
                     continue;
                 }
@@ -237,31 +280,32 @@ pub(crate) fn advance_diffusion_fixed(
                     continue;
                 }
 
-                for gas_i in 0..sim.gas_count {
-                    let k_src = sim.idx(gas_i, src);
-                    let k_dst = sim.idx(gas_i, dst);
-                    let frac = sim.curr_moles[k_src] / src_total;
+                for gas_i in 0..gas_count {
+                    let k_src = gas_i * cell_count + src;
+                    let k_dst = gas_i * cell_count + dst;
+                    let frac = curr_moles[k_src] / src_total;
                     let delta = transfer * frac;
-                    sim.next_moles[k_src] -= delta;
-                    sim.next_moles[k_dst] += delta;
+                    next_moles[k_src] -= delta;
+                    next_moles[k_dst] += delta;
                 }
             }
         }
     }
 
     if h > 1 {
-        for y in 0..(h - 1) {
-            for x in 0..w {
-                let flux = sim.flux_y[sim.flux_y_index(x, y)];
+        for y in 0..(height_usize - 1) {
+            let row = y * width_usize;
+            for x in 0..width_usize {
+                let flux = flux_y[row + x];
                 let amount = flux.abs() * dt;
                 if amount <= 0.0 {
                     continue;
                 }
 
                 let (src_y, dst_y) = if flux >= 0.0 { (y, y + 1) } else { (y + 1, y) };
-                let src = (src_y * w + x) as usize;
-                let dst = (dst_y * w + x) as usize;
-                let src_total = sim.total_moles_curr[src];
+                let src = src_y * width_usize + x;
+                let dst = dst_y * width_usize + x;
+                let src_total = total_moles_curr[src];
                 if src_total <= 0.0 {
                     continue;
                 }
@@ -272,40 +316,56 @@ pub(crate) fn advance_diffusion_fixed(
                     continue;
                 }
 
-                for gas_i in 0..sim.gas_count {
-                    let k_src = sim.idx(gas_i, src);
-                    let k_dst = sim.idx(gas_i, dst);
-                    let frac = sim.curr_moles[k_src] / src_total;
+                for gas_i in 0..gas_count {
+                    let k_src = gas_i * cell_count + src;
+                    let k_dst = gas_i * cell_count + dst;
+                    let frac = curr_moles[k_src] / src_total;
                     let delta = transfer * frac;
-                    sim.next_moles[k_src] -= delta;
-                    sim.next_moles[k_dst] += delta;
+                    next_moles[k_src] -= delta;
+                    next_moles[k_dst] += delta;
                 }
             }
         }
     }
 
     // curr <-> next (advection result becomes current)
-    std::mem::swap(&mut sim.curr_moles, &mut sim.next_moles);
+    {
+        let PressureSimState {
+            curr_moles,
+            next_moles,
+            ..
+        } = &mut *sim;
+        std::mem::swap(curr_moles, next_moles);
+    }
 
     // Diffuse each gas independently (mixing is emergent from diffusion of moles).
-    for gas_i in 0..sim.gas_count {
+    for gas_i in 0..gas_count {
         let alpha = gases.gases[gas_i].diffusion_alpha * grid.global_alpha;
         if alpha == 0.0 || dt == 0.0 {
             continue;
         }
 
-        let base = gas_i * cell_count;
-        let curr = &sim.curr_moles[base..base + cell_count];
-        let next = &mut sim.next_moles[base..base + cell_count];
+        let (curr, next) = {
+            let PressureSimState {
+                curr_moles,
+                next_moles,
+                ..
+            } = &mut *sim;
+            let base = gas_i * cell_count;
+            (
+                &curr_moles[base..base + cell_count],
+                &mut next_moles[base..base + cell_count],
+            )
+        };
         next.copy_from_slice(curr);
 
         let mut desired_out = vec![0.0_f32; cell_count];
 
         if w > 1 {
-            for y in 0..h {
-                let row = (y * w) as usize;
-                for x in 0..(w - 1) {
-                    let a = row + x as usize;
+            for y in 0..height_usize {
+                let row = y * width_usize;
+                for x in 0..(width_usize - 1) {
+                    let a = row + x;
                     let b = a + 1;
                     let diff = curr[b] - curr[a];
                     let delta = alpha * dt * diff;
@@ -319,12 +379,12 @@ pub(crate) fn advance_diffusion_fixed(
         }
 
         if h > 1 {
-            for y in 0..(h - 1) {
-                let row = (y * w) as usize;
-                let row_down = row + w as usize;
-                for x in 0..w {
-                    let a = row + x as usize;
-                    let b = row_down + x as usize;
+            for y in 0..(height_usize - 1) {
+                let row = y * width_usize;
+                let row_down = row + width_usize;
+                for x in 0..width_usize {
+                    let a = row + x;
+                    let b = row_down + x;
                     let diff = curr[b] - curr[a];
                     let delta = alpha * dt * diff;
                     if delta > 0.0 {
@@ -348,10 +408,10 @@ pub(crate) fn advance_diffusion_fixed(
         }
 
         if w > 1 {
-            for y in 0..h {
-                let row = (y * w) as usize;
-                for x in 0..(w - 1) {
-                    let a = row + x as usize;
+            for y in 0..height_usize {
+                let row = y * width_usize;
+                for x in 0..(width_usize - 1) {
+                    let a = row + x;
                     let b = a + 1;
                     let diff = curr[b] - curr[a];
                     let delta = alpha * dt * diff;
@@ -369,12 +429,12 @@ pub(crate) fn advance_diffusion_fixed(
         }
 
         if h > 1 {
-            for y in 0..(h - 1) {
-                let row = (y * w) as usize;
-                let row_down = row + w as usize;
-                for x in 0..w {
-                    let a = row + x as usize;
-                    let b = row_down + x as usize;
+            for y in 0..(height_usize - 1) {
+                let row = y * width_usize;
+                let row_down = row + width_usize;
+                for x in 0..width_usize {
+                    let a = row + x;
+                    let b = row_down + x;
                     let diff = curr[b] - curr[a];
                     let delta = alpha * dt * diff;
                     if delta > 0.0 {
@@ -392,7 +452,14 @@ pub(crate) fn advance_diffusion_fixed(
     }
 
     // curr <-> next (double buffer swap)
-    std::mem::swap(&mut sim.curr_moles, &mut sim.next_moles);
+    {
+        let PressureSimState {
+            curr_moles,
+            next_moles,
+            ..
+        } = &mut *sim;
+        std::mem::swap(curr_moles, next_moles);
+    }
 
     // Optional: clear next (not required, because we fully overwrite it each step)
     // sim.next_moles.fill(0.0);
