@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::render::texture::ImageSampler;
+use bevy::image::ImageSampler;
 use std::time::Instant;
 
 // ------------------------------------
