@@ -228,9 +228,9 @@ pub(crate) fn update_overlay_mode_input(
 
 pub(crate) fn update_selected_tile_input(
     buttons: Res<ButtonInput<MouseButton>>,
-    window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
-    heatmap: Query<&GlobalTransform, With<HeatmapSprite>>,
+    window_query: Query<&Window, With<PrimaryWindow>>,
+    camera_query: Query<(&Camera, &GlobalTransform)>,
+    heatmap_query: Query<&GlobalTransform, With<HeatmapSprite>>,
     grid: Res<GridSettings>,
     mut selected: ResMut<SelectedCell>,
 ) {
@@ -238,17 +238,17 @@ pub(crate) fn update_selected_tile_input(
         return;
     }
 
-    let Ok(window) = window.get_single() else {
+    let Ok(window) = window_query.single() else {
         return;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
 
-    let Ok((camera, camera_transform)) = camera.get_single() else {
+    let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
-    let Ok(heatmap_transform) = heatmap.get_single() else {
+    let Ok(heatmap_transform) = heatmap_query.single() else {
         return;
     };
 
