@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::texture::ImageSampler;
 use std::time::Instant;
@@ -377,6 +378,7 @@ fn setup(
         TextureDimension::D2,
         &[0, 0, 0, 255],
         TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
     );
     image.sampler = ImageSampler::nearest();
     let image_handle = images.add(image);
