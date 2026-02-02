@@ -221,8 +221,10 @@ pub(crate) fn update_heatmap_texture(
 
     let width = heatmap.width as usize;
     let height = heatmap.height as usize;
-    let data = &mut image.data;
     let expected_len = width * height * 4;
+    let data = image
+        .data
+        .get_or_insert_with(|| vec![0; expected_len]);
     if data.len() != expected_len {
         data.resize(expected_len, 0);
     }
