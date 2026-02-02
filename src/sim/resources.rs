@@ -152,7 +152,7 @@ impl Default for GridSettings {
             bulk_flow_k: 0.4,
             bulk_flow_relax: 0.35,
             bulk_flow_damping: 0.8,
-            wind_visual_relax: 0.25,
+            wind_visual_relax: 0.05,
             pressure_visual_relax: 0.35,
             wind_visual_min_speed: 0.15,
             max_flow_fraction: 0.25,
