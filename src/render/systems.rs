@@ -252,7 +252,7 @@ pub(crate) fn update_selected_tile_input(
         return;
     };
 
-    let Some(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {
+    let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {
         return;
     };
 
