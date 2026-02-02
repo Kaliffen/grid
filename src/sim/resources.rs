@@ -109,6 +109,11 @@ pub struct GridSettings {
     pub width: u32,
     pub height: u32,
 
+    /// Ideal gas law: P = n R T / V (constant per cell for now).
+    pub gas_constant: f32,
+    pub temperature: f32,
+    pub cell_volume: f32,
+
     /// Optional global scalar multiplier on diffusion coefficient.
     /// Final alpha used: gas.diffusion_alpha * global_alpha
     pub global_alpha: f32,
@@ -123,8 +128,11 @@ pub struct GridSettings {
 impl Default for GridSettings {
     fn default() -> Self {
         Self {
-            width: 32,
-            height: 32,
+            width: 64,
+            height: 64,
+            gas_constant: 8.314,
+            temperature: 293.15,
+            cell_volume: 1.0,
             global_alpha: 1.0,
             bulk_flow_k: 0.4,
             max_flow_fraction: 0.25,
@@ -164,6 +172,7 @@ pub(crate) struct PressureSimState {
     pub(crate) next_moles: Vec<f32>,
 
     // derived pressure and bulk-flow fluxes
+    pub(crate) total_moles_curr: Vec<f32>,
     pub(crate) pressure_curr: Vec<f32>,
     pub(crate) flux_x: Vec<f32>,
     pub(crate) flux_y: Vec<f32>,
@@ -185,6 +194,7 @@ impl PressureSimState {
             prev_moles: vec![0.0; total_len],
             curr_moles: vec![0.0; total_len],
             next_moles: vec![0.0; total_len],
+            total_moles_curr: vec![0.0; cell_count],
             pressure_curr: vec![0.0; cell_count],
             flux_x: vec![0.0; flux_x_len],
             flux_y: vec![0.0; flux_y_len],
