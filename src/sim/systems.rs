@@ -284,6 +284,53 @@ pub(crate) fn build_presented_state(
         presented.pressure[cell_i] = total;
     }
 
+    // Build a per-cell wind vector from the current pressure-driven fluxes.
+    let width = sim.width;
+    let height = sim.height;
+    let mut max_wind_sq: f32 = 0.0;
+    for y in 0..height {
+        for x in 0..width {
+            let mut wind_x = 0.0;
+            let mut wind_y = 0.0;
+            let mut count_x = 0.0;
+            let mut count_y = 0.0;
+
+            if width > 1 {
+                if x > 0 {
+                    wind_x += sim.flux_x[sim.flux_x_index(x - 1, y)];
+                    count_x += 1.0;
+                }
+                if x + 1 < width {
+                    wind_x += sim.flux_x[sim.flux_x_index(x, y)];
+                    count_x += 1.0;
+                }
+            }
+
+            if height > 1 {
+                if y > 0 {
+                    wind_y += sim.flux_y[sim.flux_y_index(x, y - 1)];
+                    count_y += 1.0;
+                }
+                if y + 1 < height {
+                    wind_y += sim.flux_y[sim.flux_y_index(x, y)];
+                    count_y += 1.0;
+                }
+            }
+
+            if count_x > 0.0 {
+                wind_x /= count_x;
+            }
+            if count_y > 0.0 {
+                wind_y /= count_y;
+            }
+
+            let idx = sim.cell_index(x, y);
+            presented.wind[idx] = Vec2::new(wind_x, wind_y);
+            max_wind_sq = max_wind_sq.max(wind_x * wind_x + wind_y * wind_y);
+        }
+    }
+    presented.max_wind_speed = max_wind_sq.sqrt();
+
     // Center-cell composition summary for UI
     let cx = sim.width / 2;
     let cy = sim.height / 2;
