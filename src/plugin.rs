@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::texture::ImageSampler;
 use std::time::Instant;
 
 // ------------------------------------
@@ -261,6 +263,20 @@ struct RenderDiag {
 }
 
 // ------------------------------------
+// Heatmap rendering
+// ------------------------------------
+
+#[derive(Resource)]
+struct HeatmapViz {
+    image: Handle<Image>,
+    width: u32,
+    height: u32,
+    min_pressure: f32,
+    max_pressure: f32,
+    last_tick: u64,
+}
+
+// ------------------------------------
 // UI
 // ------------------------------------
 
@@ -285,7 +301,7 @@ impl Plugin for PressureDiffusionPlugin {
                 RunFixedMainLoop,
                 build_presented_state.in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
             )
-            .add_systems(Update, (update_ui, render_diagnostics));
+            .add_systems(Update, (update_ui, update_heatmap_texture, render_diagnostics));
     }
 }
 
@@ -293,6 +309,7 @@ fn setup(
     mut commands: Commands,
     grid: Res<GridSettings>,
     gases: Res<GasCatalog>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     // Camera + UI
     commands.spawn(Camera2d);
@@ -347,8 +364,39 @@ fn setup(
 
     let presented = PressurePresented::new(grid.width, grid.height, gas_count);
 
+    let max_dim = grid.width.max(grid.height) as f32;
+    let target_screen_size = 512.0_f32;
+    let scale = (target_screen_size / max_dim).clamp(0.1, 16.0);
+
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: grid.width,
+            height: grid.height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Rgba8UnormSrgb,
+    );
+    image.sampler = ImageSampler::nearest();
+    let image_handle = images.add(image);
+
+    commands.spawn(SpriteBundle {
+        texture: image_handle.clone(),
+        transform: Transform::from_scale(Vec3::splat(scale)),
+        ..default()
+    });
+
     commands.insert_resource(sim);
     commands.insert_resource(presented);
+    commands.insert_resource(HeatmapViz {
+        image: image_handle,
+        width: grid.width,
+        height: grid.height,
+        min_pressure: 0.0,
+        max_pressure: 20.0,
+        last_tick: 0,
+    });
     commands.insert_resource(SimDiag::default());
     commands.insert_resource(RenderDiag::default());
 }
@@ -525,6 +573,52 @@ fn update_ui(
             presented.center_total_moles,
             comp
         ));
+    }
+}
+
+// ------------------------------------
+// Heatmap rendering: Update
+// ------------------------------------
+
+fn update_heatmap_texture(
+    presented: Res<PressurePresented>,
+    mut heatmap: ResMut<HeatmapViz>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if presented.tick == heatmap.last_tick {
+        return;
+    }
+    heatmap.last_tick = presented.tick;
+
+    let Some(image) = images.get_mut(&heatmap.image) else {
+        return;
+    };
+
+    let min_p = heatmap.min_pressure;
+    let max_p = heatmap.max_pressure.max(min_p + f32::EPSILON);
+    let inv_range = 1.0 / (max_p - min_p);
+
+    let width = heatmap.width as usize;
+    let height = heatmap.height as usize;
+    let data = &mut image.data;
+
+    for y in 0..height {
+        for x in 0..width {
+            let cell_i = y * width + x;
+            let pressure = presented.pressure[cell_i];
+            let mut t = (pressure - min_p) * inv_range;
+            t = t.clamp(0.0, 1.0);
+
+            let low = Vec3::new(0.05, 0.05, 0.3);
+            let high = Vec3::new(1.0, 0.2, 0.1);
+            let rgb = low.lerp(high, t);
+
+            let base = cell_i * 4;
+            data[base] = (rgb.x * 255.0) as u8;
+            data[base + 1] = (rgb.y * 255.0) as u8;
+            data[base + 2] = (rgb.z * 255.0) as u8;
+            data[base + 3] = 255;
+        }
     }
 }
 
