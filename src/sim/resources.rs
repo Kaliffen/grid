@@ -121,6 +121,12 @@ pub struct GridSettings {
     /// Bulk-flow permeability constant for pressure-driven advection.
     pub bulk_flow_k: f32,
 
+    /// Under-relaxation factor for bulk-flow flux updates (0 = keep old, 1 = full new).
+    pub bulk_flow_relax: f32,
+
+    /// Exponential damping applied to bulk-flow fluxes each step.
+    pub bulk_flow_damping: f32,
+
     /// Max fraction of a cell's total moles that can move across a face per step.
     pub max_flow_fraction: f32,
 }
@@ -135,6 +141,8 @@ impl Default for GridSettings {
             cell_volume: 1.0,
             global_alpha: 1.0,
             bulk_flow_k: 0.4,
+            bulk_flow_relax: 0.35,
+            bulk_flow_damping: 0.8,
             max_flow_fraction: 0.25,
         }
     }

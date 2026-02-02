@@ -5,6 +5,78 @@ use crate::sim::resources::{
     GasCatalog, GasKind, GridSettings, PressurePresented, PressureSimState,
 };
 
+fn recompute_pressure_and_flux(sim: &mut PressureSimState, grid: &GridSettings, dt: f32) {
+    let cell_count = sim.cell_count;
+    let gas_count = sim.gas_count;
+
+    // Compute total moles per cell.
+    sim.total_moles_curr.fill(0.0);
+    {
+        let PressureSimState {
+            curr_moles,
+            total_moles_curr,
+            ..
+        } = &mut *sim;
+        for gas_i in 0..gas_count {
+            let base = gas_i * cell_count;
+            let curr = &curr_moles[base..base + cell_count];
+            for cell_i in 0..cell_count {
+                total_moles_curr[cell_i] += curr[cell_i];
+            }
+        }
+    }
+
+    let inv_volume = if grid.cell_volume > 0.0 {
+        1.0 / grid.cell_volume
+    } else {
+        0.0
+    };
+
+    // Compute pressure per cell (ideal gas law).
+    sim.pressure_curr.fill(0.0);
+    {
+        let PressureSimState {
+            total_moles_curr,
+            pressure_curr,
+            ..
+        } = &mut *sim;
+        for cell_i in 0..cell_count {
+            let total = total_moles_curr[cell_i];
+            pressure_curr[cell_i] = total * grid.gas_constant * grid.temperature * inv_volume;
+        }
+    }
+
+    // Compute bulk-flow fluxes from pressure gradients (edge-based).
+    let relax = grid.bulk_flow_relax.clamp(0.0, 1.0);
+    let damping = (-grid.bulk_flow_damping * dt).exp();
+    {
+        let PressureSimState {
+            pressure_curr,
+            flux_x,
+            flux_y,
+            edges_x,
+            edges_y,
+            ..
+        } = &mut *sim;
+
+        for (edge_i, (left, right)) in edges_x.iter().enumerate() {
+            let p_left = pressure_curr[*left];
+            let p_right = pressure_curr[*right];
+            let computed = grid.bulk_flow_k * (p_left - p_right);
+            let blended = flux_x[edge_i].lerp(computed, relax);
+            flux_x[edge_i] = blended * damping;
+        }
+
+        for (edge_i, (top, bottom)) in edges_y.iter().enumerate() {
+            let p_top = pressure_curr[*top];
+            let p_bottom = pressure_curr[*bottom];
+            let computed = grid.bulk_flow_k * (p_top - p_bottom);
+            let blended = flux_y[edge_i].lerp(computed, relax);
+            flux_y[edge_i] = blended * damping;
+        }
+    }
+}
+
 // ------------------------------------
 // Diagnostics (SIM)
 // ------------------------------------
@@ -94,64 +166,7 @@ pub(crate) fn advance_diffusion_fixed(
     let cell_count = sim.cell_count;
     let gas_count = sim.gas_count;
 
-    // Compute total moles and pressure per cell (ideal gas law).
-    sim.total_moles_curr.fill(0.0);
-    {
-        let PressureSimState {
-            curr_moles,
-            total_moles_curr,
-            ..
-        } = &mut *sim;
-        for gas_i in 0..gas_count {
-            let base = gas_i * cell_count;
-            let curr = &curr_moles[base..base + cell_count];
-            for cell_i in 0..cell_count {
-                total_moles_curr[cell_i] += curr[cell_i];
-            }
-        }
-    }
-
-    let inv_volume = if grid.cell_volume > 0.0 {
-        1.0 / grid.cell_volume
-    } else {
-        0.0
-    };
-    sim.pressure_curr.fill(0.0);
-    {
-        let PressureSimState {
-            total_moles_curr,
-            pressure_curr,
-            ..
-        } = &mut *sim;
-        for cell_i in 0..cell_count {
-            let total = total_moles_curr[cell_i];
-            pressure_curr[cell_i] = total * grid.gas_constant * grid.temperature * inv_volume;
-        }
-    }
-
-    // Compute bulk-flow fluxes from pressure gradients (edge-based).
-    {
-        let PressureSimState {
-            pressure_curr,
-            flux_x,
-            flux_y,
-            edges_x,
-            edges_y,
-            ..
-        } = &mut *sim;
-
-        for (edge_i, (left, right)) in edges_x.iter().enumerate() {
-            let p_left = pressure_curr[*left];
-            let p_right = pressure_curr[*right];
-            flux_x[edge_i] = grid.bulk_flow_k * (p_left - p_right);
-        }
-
-        for (edge_i, (top, bottom)) in edges_y.iter().enumerate() {
-            let p_top = pressure_curr[*top];
-            let p_bottom = pressure_curr[*bottom];
-            flux_y[edge_i] = grid.bulk_flow_k * (p_top - p_bottom);
-        }
-    }
+    recompute_pressure_and_flux(&mut sim, &grid, dt);
 
     // Advection: move mixture along fluxes using upwind composition (curr state).
     let (curr_moles, next_moles, total_moles_curr, flux_x, flux_y, edges_x, edges_y) = {
@@ -384,6 +399,9 @@ pub(crate) fn advance_diffusion_fixed(
         } = &mut *sim;
         std::mem::swap(curr_moles, next_moles);
     }
+
+    // Update pressure/fluxes from the final state for presentation and next step coherence.
+    recompute_pressure_and_flux(&mut sim, &grid, dt);
 
     // Optional: clear next (not required, because we fully overwrite it each step)
     // sim.next_moles.fill(0.0);
