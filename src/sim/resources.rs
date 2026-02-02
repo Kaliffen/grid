@@ -130,6 +130,12 @@ pub struct GridSettings {
     /// Presentation-only smoothing for wind vectors (0 = keep old, 1 = full new).
     pub wind_visual_relax: f32,
 
+    /// Presentation-only smoothing for pressure visualization (0 = keep old, 1 = full new).
+    pub pressure_visual_relax: f32,
+
+    /// Minimum wind speed used for visualization scaling (prevents tiny noise from saturating).
+    pub wind_visual_min_speed: f32,
+
     /// Max fraction of a cell's total moles that can move across a face per step.
     pub max_flow_fraction: f32,
 }
@@ -147,6 +153,8 @@ impl Default for GridSettings {
             bulk_flow_relax: 0.35,
             bulk_flow_damping: 0.8,
             wind_visual_relax: 0.25,
+            pressure_visual_relax: 0.35,
+            wind_visual_min_speed: 0.15,
             max_flow_fraction: 0.25,
         }
     }

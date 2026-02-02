@@ -430,6 +430,7 @@ pub(crate) fn build_presented_state(
     } else {
         0.0
     };
+    let pressure_relax = grid.pressure_visual_relax.clamp(0.0, 1.0);
     for cell_i in 0..cell_count {
         let mut total = 0.0;
 
@@ -441,7 +442,8 @@ pub(crate) fn build_presented_state(
             total += interp;
         }
 
-        presented.pressure[cell_i] = total * grid.gas_constant * grid.temperature * inv_volume;
+        let target = total * grid.gas_constant * grid.temperature * inv_volume;
+        presented.pressure[cell_i] = presented.pressure[cell_i].lerp(target, pressure_relax);
     }
 
     // Build a per-cell wind vector from the interpolated pressure field.
