@@ -159,6 +159,12 @@ pub(crate) fn advance_diffusion_fixed(
     let curr = sim.curr_moles.clone();
     sim.prev_moles.resize(curr.len(), 0.0);
     sim.prev_moles.copy_from_slice(&curr);
+    let flux_x = sim.flux_x.clone();
+    sim.prev_flux_x.resize(flux_x.len(), 0.0);
+    sim.prev_flux_x.copy_from_slice(&flux_x);
+    let flux_y = sim.flux_y.clone();
+    sim.prev_flux_y.resize(flux_y.len(), 0.0);
+    sim.prev_flux_y.copy_from_slice(&flux_y);
 
     sim.tick += 1;
 
@@ -446,11 +452,11 @@ pub(crate) fn build_presented_state(
         presented.pressure[cell_i] = presented.pressure[cell_i].lerp(target, pressure_relax);
     }
 
-    // Build a per-cell wind vector from the interpolated pressure field.
+    // Build a per-cell wind vector from interpolated fluxes (edge-based).
     let width = sim.width;
     let height = sim.height;
-    let mut max_wind_sq: f32 = 0.0;
-    let wind_relax = grid.wind_visual_relax.clamp(0.0, 1.0);
+    let mut frame_max_wind_sq: f32 = 0.0;
+    let mut raw_wind = vec![Vec2::ZERO; cell_count];
     for y in 0..height {
         for x in 0..width {
             let mut wind_x = 0.0;
@@ -460,30 +466,34 @@ pub(crate) fn build_presented_state(
 
             if width > 1 {
                 if x > 0 {
-                    let left = sim.cell_index(x - 1, y);
-                    let curr = sim.cell_index(x, y);
-                    wind_x += grid.bulk_flow_k * (presented.pressure[left] - presented.pressure[curr]);
+                    let edge_i = sim.flux_x_index(x - 1, y);
+                    let prev = sim.prev_flux_x[edge_i];
+                    let curr = sim.flux_x[edge_i];
+                    wind_x += prev.lerp(curr, alpha);
                     count_x += 1.0;
                 }
                 if x + 1 < width {
-                    let curr = sim.cell_index(x, y);
-                    let right = sim.cell_index(x + 1, y);
-                    wind_x += grid.bulk_flow_k * (presented.pressure[curr] - presented.pressure[right]);
+                    let edge_i = sim.flux_x_index(x, y);
+                    let prev = sim.prev_flux_x[edge_i];
+                    let curr = sim.flux_x[edge_i];
+                    wind_x += prev.lerp(curr, alpha);
                     count_x += 1.0;
                 }
             }
 
             if height > 1 {
                 if y > 0 {
-                    let top = sim.cell_index(x, y - 1);
-                    let curr = sim.cell_index(x, y);
-                    wind_y += grid.bulk_flow_k * (presented.pressure[top] - presented.pressure[curr]);
+                    let edge_i = sim.flux_y_index(x, y - 1);
+                    let prev = sim.prev_flux_y[edge_i];
+                    let curr = sim.flux_y[edge_i];
+                    wind_y += prev.lerp(curr, alpha);
                     count_y += 1.0;
                 }
                 if y + 1 < height {
-                    let curr = sim.cell_index(x, y);
-                    let bottom = sim.cell_index(x, y + 1);
-                    wind_y += grid.bulk_flow_k * (presented.pressure[curr] - presented.pressure[bottom]);
+                    let edge_i = sim.flux_y_index(x, y);
+                    let prev = sim.prev_flux_y[edge_i];
+                    let curr = sim.flux_y[edge_i];
+                    wind_y += prev.lerp(curr, alpha);
                     count_y += 1.0;
                 }
             }
@@ -496,13 +506,50 @@ pub(crate) fn build_presented_state(
             }
 
             let idx = sim.cell_index(x, y);
-            let target = Vec2::new(wind_x, wind_y);
-            let smoothed = presented.wind[idx].lerp(target, wind_relax);
-            presented.wind[idx] = smoothed;
-            max_wind_sq = max_wind_sq.max(smoothed.length_squared());
+            raw_wind[idx] = Vec2::new(wind_x, wind_y);
         }
     }
-    presented.max_wind_speed = max_wind_sq.sqrt();
+
+    // Single cheap blur pass to reduce grid noise.
+    let self_weight = 0.25;
+    let neighbor_weight = 0.1875;
+    for y in 0..height {
+        for x in 0..width {
+            let mut acc = Vec2::ZERO;
+            let mut weight = 0.0;
+            let idx = sim.cell_index(x, y);
+
+            acc += raw_wind[idx] * self_weight;
+            weight += self_weight;
+
+            if x > 0 {
+                acc += raw_wind[sim.cell_index(x - 1, y)] * neighbor_weight;
+                weight += neighbor_weight;
+            }
+            if x + 1 < width {
+                acc += raw_wind[sim.cell_index(x + 1, y)] * neighbor_weight;
+                weight += neighbor_weight;
+            }
+            if y > 0 {
+                acc += raw_wind[sim.cell_index(x, y - 1)] * neighbor_weight;
+                weight += neighbor_weight;
+            }
+            if y + 1 < height {
+                acc += raw_wind[sim.cell_index(x, y + 1)] * neighbor_weight;
+                weight += neighbor_weight;
+            }
+
+            let smoothed = if weight > 0.0 { acc / weight } else { Vec2::ZERO };
+            presented.wind[idx] = smoothed;
+            frame_max_wind_sq = frame_max_wind_sq.max(smoothed.length_squared());
+        }
+    }
+
+    let frame_max = frame_max_wind_sq.sqrt();
+    let smoothed_max = presented.max_wind_speed.lerp(frame_max, 0.1);
+    presented.max_wind_speed = smoothed_max
+        .max(grid.wind_visual_min_speed)
+        .max(1e-4);
 
     // Center-cell composition summary for UI
     let cx = sim.width / 2;

@@ -194,6 +194,8 @@ pub(crate) struct PressureSimState {
     // derived pressure and bulk-flow fluxes
     pub(crate) total_moles_curr: Vec<f32>,
     pub(crate) pressure_curr: Vec<f32>,
+    pub(crate) prev_flux_x: Vec<f32>,
+    pub(crate) prev_flux_y: Vec<f32>,
     pub(crate) flux_x: Vec<f32>,
     pub(crate) flux_y: Vec<f32>,
     pub(crate) edges_x: Vec<(usize, usize)>,
@@ -242,6 +244,8 @@ impl PressureSimState {
             next_moles: vec![0.0; total_len],
             total_moles_curr: vec![0.0; cell_count],
             pressure_curr: vec![0.0; cell_count],
+            prev_flux_x: vec![0.0; flux_x_len],
+            prev_flux_y: vec![0.0; flux_y_len],
             flux_x: vec![0.0; flux_x_len],
             flux_y: vec![0.0; flux_y_len],
             edges_x,
