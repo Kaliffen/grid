@@ -3,7 +3,9 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::sim::resources::{GasCatalog, GridSettings, PressurePresented};
+use bevy::window::PrimaryWindow;
+
+use crate::sim::resources::{GasCatalog, GridSettings, PressurePresented, SelectedCell};
 
 // ------------------------------------
 // Diagnostics (Render)
@@ -61,6 +63,15 @@ impl OverlayMode {
 #[derive(Component)]
 pub(crate) struct VizLabel;
 
+#[derive(Component)]
+pub(crate) struct HeatmapSprite;
+
+#[derive(Default)]
+struct UiState {
+    last_tick: u64,
+    last_selected: SelectedCell,
+}
+
 // ------------------------------------
 // Startup: Render setup
 // ------------------------------------
@@ -109,6 +120,7 @@ pub(crate) fn setup_render(
     commands.spawn((
         Sprite::from_image(image_handle.clone()),
         Transform::from_scale(Vec3::splat(scale)),
+        HeatmapSprite,
     ));
 
     commands.insert_resource(HeatmapViz {
@@ -131,20 +143,22 @@ pub(crate) fn update_ui(
     gases: Res<GasCatalog>,
     presented: Res<PressurePresented>,
     overlay: Res<OverlayMode>,
+    selected: Res<SelectedCell>,
     mut q: Query<&mut Text, With<VizLabel>>,
-    mut last_tick: Local<u64>,
+    mut ui_state: Local<UiState>,
 ) {
     // Update UI when the sim tick changes (vsync may show repeated frames)
-    if presented.tick == *last_tick {
+    if presented.tick == ui_state.last_tick && *selected == ui_state.last_selected {
         return;
     }
-    *last_tick = presented.tick;
+    ui_state.last_tick = presented.tick;
+    ui_state.last_selected = *selected;
 
-    // Build a short composition string for the center cell: show top 3 gases by fraction
+    // Build a short composition string for the selected cell: show top 3 gases by fraction
     let mut indices: Vec<usize> = (0..gases.gases.len()).collect();
     indices.sort_by(|&a, &b| {
-        presented.center_gas_fractions[b]
-            .partial_cmp(&presented.center_gas_fractions[a])
+        presented.selected_gas_fractions[b]
+            .partial_cmp(&presented.selected_gas_fractions[a])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
@@ -152,7 +166,7 @@ pub(crate) fn update_ui(
     let mut comp = String::new();
     for i in 0..top_n {
         let gi = indices[i];
-        let frac = presented.center_gas_fractions[gi];
+        let frac = presented.selected_gas_fractions[gi];
         if frac <= 0.0 {
             continue;
         }
@@ -168,11 +182,23 @@ pub(crate) fn update_ui(
     }
 
     if let Ok(mut text) = q.single_mut() {
+        let cell_i = (selected.y * presented.width + selected.x) as usize;
+        let wind = presented
+            .wind
+            .get(cell_i)
+            .copied()
+            .unwrap_or(Vec2::ZERO);
+        let wind_speed = wind.length();
         *text = Text::new(format!(
-            "tick: {}\ncenter total moles (pressure proxy): {:.6}\ncenter mix: {}\noverlay: {} (space cycle, 1 pressure, 2 wind, 3 both)",
+            "tick: {}\nselected cell: ({}, {})\nselected total moles (pressure proxy): {:.6}\nselected mix: {}\nwind (m/s): [{:.3}, {:.3}] |v|={:.3}\noverlay: {} (space cycle, 1 pressure, 2 wind, 3 both)",
             presented.tick,
-            presented.center_total_moles,
+            selected.x,
+            selected.y,
+            presented.selected_total_moles,
             comp,
+            wind.x,
+            wind.y,
+            wind_speed,
             overlay.label(),
         ));
     }
@@ -198,6 +224,59 @@ pub(crate) fn update_overlay_mode_input(
     if keys.just_pressed(KeyCode::Digit3) {
         *overlay = OverlayMode::Both;
     }
+}
+
+pub(crate) fn update_selected_tile_input(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    camera: Query<(&Camera, &GlobalTransform)>,
+    heatmap: Query<&GlobalTransform, With<HeatmapSprite>>,
+    grid: Res<GridSettings>,
+    mut selected: ResMut<SelectedCell>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let Ok(window) = window.get_single() else {
+        return;
+    };
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+
+    let Ok((camera, camera_transform)) = camera.get_single() else {
+        return;
+    };
+    let Ok(heatmap_transform) = heatmap.get_single() else {
+        return;
+    };
+
+    let Some(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {
+        return;
+    };
+
+    let local = heatmap_transform
+        .affine()
+        .inverse()
+        .transform_point3(Vec3::new(world_pos.x, world_pos.y, 0.0));
+
+    let half_width = grid.width as f32 * 0.5;
+    let half_height = grid.height as f32 * 0.5;
+    let pixel_x = local.x + half_width;
+    let pixel_y = half_height - local.y;
+
+    if pixel_x < 0.0
+        || pixel_y < 0.0
+        || pixel_x >= grid.width as f32
+        || pixel_y >= grid.height as f32
+    {
+        return;
+    }
+
+    let x = pixel_x.floor() as u32;
+    let y = pixel_y.floor() as u32;
+    *selected = SelectedCell { x, y };
 }
 
 pub(crate) fn update_heatmap_texture(

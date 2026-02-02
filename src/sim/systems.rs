@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::time::Instant;
 
 use crate::sim::resources::{
-    GasCatalog, GasKind, GridSettings, PressurePresented, PressureSimState,
+    GasCatalog, GasKind, GridSettings, PressurePresented, PressureSimState, SelectedCell,
 };
 
 fn recompute_pressure_and_flux(sim: &mut PressureSimState, grid: &GridSettings, dt: f32) {
@@ -143,6 +143,7 @@ pub(crate) fn setup_sim(mut commands: Commands, grid: Res<GridSettings>, gases: 
     commands.insert_resource(sim);
     commands.insert_resource(presented);
     commands.insert_resource(SimDiag::default());
+    commands.insert_resource(SelectedCell::center(&grid));
 }
 
 // ------------------------------------
@@ -422,6 +423,7 @@ pub(crate) fn build_presented_state(
     grid: Res<GridSettings>,
     gases: Res<GasCatalog>,
     sim: Res<PressureSimState>,
+    selected: Res<SelectedCell>,
     mut presented: ResMut<PressurePresented>,
 ) {
     // Interpolation factor between prev and curr fixed states.
@@ -551,30 +553,28 @@ pub(crate) fn build_presented_state(
         .max(grid.wind_visual_min_speed)
         .max(1e-4);
 
-    // Center-cell composition summary for UI
-    let cx = sim.width / 2;
-    let cy = sim.height / 2;
-    let c = sim.cell_index(cx, cy);
+    // Selected-cell composition summary for UI
+    let selected_index = selected.index(&grid);
 
-    let mut center_total = 0.0;
+    let mut selected_total = 0.0;
     for gas_i in 0..sim.gas_count {
-        let k = sim.idx(gas_i, c);
+        let k = sim.idx(gas_i, selected_index);
         let prev = sim.prev_moles[k];
         let curr = sim.curr_moles[k];
         let interp = prev.lerp(curr, alpha);
-        presented.center_gas_fractions[gas_i] = interp; // temporarily store moles
-        center_total += interp;
+        presented.selected_gas_fractions[gas_i] = interp; // temporarily store moles
+        selected_total += interp;
     }
 
-    presented.center_total_moles = center_total;
+    presented.selected_total_moles = selected_total;
 
-    if center_total > 0.0 {
+    if selected_total > 0.0 {
         for gas_i in 0..sim.gas_count {
-            presented.center_gas_fractions[gas_i] /= center_total;
+            presented.selected_gas_fractions[gas_i] /= selected_total;
         }
     } else {
         for gas_i in 0..sim.gas_count {
-            presented.center_gas_fractions[gas_i] = 0.0;
+            presented.selected_gas_fractions[gas_i] = 0.0;
         }
     }
 
