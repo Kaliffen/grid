@@ -12,7 +12,9 @@ fn main() {
     let sim_hz = 120.0;
 
     App::new()
-        .insert_resource(Time::<Fixed>::from_duration(Duration::from_secs_f64(1.0 / sim_hz)))
+        .insert_resource(Time::<Fixed>::from_duration(Duration::from_secs_f64(
+            1.0 / sim_hz,
+        )))
         .add_plugins(DefaultPlugins)
         .add_plugins((PressureSimPlugin, PressureRenderPlugin))
         .run();
