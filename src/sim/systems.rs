@@ -515,6 +515,7 @@ pub(crate) fn build_presented_state(
     // Single cheap blur pass to reduce grid noise.
     let self_weight = 0.25;
     let neighbor_weight = 0.1875;
+    let wind_relax = grid.wind_visual_relax.clamp(0.0, 1.0);
     for y in 0..height {
         for x in 0..width {
             let mut acc = Vec2::ZERO;
@@ -542,8 +543,9 @@ pub(crate) fn build_presented_state(
             }
 
             let smoothed = if weight > 0.0 { acc / weight } else { Vec2::ZERO };
-            presented.wind[idx] = smoothed;
-            frame_max_wind_sq = frame_max_wind_sq.max(smoothed.length_squared());
+            let blended = presented.wind[idx].lerp(smoothed, wind_relax);
+            presented.wind[idx] = blended;
+            frame_max_wind_sq = frame_max_wind_sq.max(blended.length_squared());
         }
     }
 
