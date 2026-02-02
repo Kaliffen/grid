@@ -117,8 +117,8 @@ pub struct GridSettings {
 impl Default for GridSettings {
     fn default() -> Self {
         Self {
-            width: 2048,
-            height: 2048,
+            width: 32,
+            height: 32,
             global_alpha: 1.0,
         }
     }

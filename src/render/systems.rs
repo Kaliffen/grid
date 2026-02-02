@@ -186,7 +186,15 @@ pub(crate) fn update_heatmap_texture(
             let rgb = low.lerp(high, t);
 
             let base = cell_i * 4;
-            data[base] = (rgb.x * 255.0) as u8;
+            let data = data.get_or_insert_with(Vec::new);
+
+            // ensure it is large enough (example; pick correct size)
+            let needed = base + 4;
+            if data.len() < needed {
+                data.resize(needed, 0);
+            }
+
+            data[base]     = (rgb.x * 255.0) as u8;
             data[base + 1] = (rgb.y * 255.0) as u8;
             data[base + 2] = (rgb.z * 255.0) as u8;
             data[base + 3] = 255;
