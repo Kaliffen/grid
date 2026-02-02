@@ -134,7 +134,12 @@ pub(crate) fn advance_diffusion_fixed(
     }
 
     // Advection: move mixture along fluxes using upwind composition (curr state).
-    sim.next_moles.clone_from(&sim.curr_moles);
+    let (curr_moles, next_moles) = {
+        let s = &mut *sim;
+        (&s.curr_moles, &mut s.next_moles)
+    };
+
+    next_moles.clone_from(curr_moles);
 
     if w > 1 {
         for y in 0..h {
