@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use std::time::Instant;
 
-use crate::sim::resources::{GasCatalog, GasKind, GridSettings, PressurePresented, PressureSimState};
+use crate::sim::resources::{
+    GasCatalog, GasKind, GridSettings, PressurePresented, PressureSimState,
+};
 
 // ------------------------------------
 // Diagnostics (SIM)
@@ -31,11 +33,7 @@ impl Default for SimDiag {
 // Startup: Simulation setup
 // ------------------------------------
 
-pub(crate) fn setup_sim(
-    mut commands: Commands,
-    grid: Res<GridSettings>,
-    gases: Res<GasCatalog>,
-) {
+pub(crate) fn setup_sim(mut commands: Commands, grid: Res<GridSettings>, gases: Res<GasCatalog>) {
     let gas_count = gases.gases.len();
     let mut sim = PressureSimState::new(grid.width, grid.height, gas_count);
 
@@ -95,6 +93,127 @@ pub(crate) fn advance_diffusion_fixed(
     let dt = fixed_time.delta_secs();
     let w = sim.width;
     let h = sim.height;
+
+    // Compute pressure as total moles per cell.
+    sim.pressure_curr.fill(0.0);
+    for cell_i in 0..sim.cell_count {
+        let mut total = 0.0;
+        for gas_i in 0..sim.gas_count {
+            total += sim.read_curr(gas_i, cell_i);
+        }
+        sim.pressure_curr[cell_i] = total;
+    }
+
+    // Compute bulk-flow fluxes from pressure gradients.
+    if w > 1 {
+        for y in 0..h {
+            for x in 0..(w - 1) {
+                let left = sim.cell_index(x, y);
+                let right = sim.cell_index(x + 1, y);
+                let p_left = sim.pressure_curr[left];
+                let p_right = sim.pressure_curr[right];
+                let flux = grid.bulk_flow_k * (p_left - p_right);
+                let k = sim.flux_x_index(x, y);
+                sim.flux_x[k] = flux;
+            }
+        }
+    }
+
+    if h > 1 {
+        for y in 0..(h - 1) {
+            for x in 0..w {
+                let top = sim.cell_index(x, y);
+                let bottom = sim.cell_index(x, y + 1);
+                let p_top = sim.pressure_curr[top];
+                let p_bottom = sim.pressure_curr[bottom];
+                let flux = grid.bulk_flow_k * (p_top - p_bottom);
+                let k = sim.flux_y_index(x, y);
+                sim.flux_y[k] = flux;
+            }
+        }
+    }
+
+    // Advection: move mixture along fluxes using upwind composition (curr state).
+    let (curr_moles, next_moles) = {
+        let s = &mut *sim;
+        (&s.curr_moles, &mut s.next_moles)
+    };
+
+    next_moles.clone_from(curr_moles);
+
+    if w > 1 {
+        for y in 0..h {
+            for x in 0..(w - 1) {
+                let flux = sim.flux_x[sim.flux_x_index(x, y)];
+                let (src_x, dst_x, amount) = if flux >= 0.0 {
+                    (x, x + 1, flux * dt)
+                } else {
+                    (x + 1, x, -flux * dt)
+                };
+
+                let src = sim.cell_index(src_x, y);
+                let dst = sim.cell_index(dst_x, y);
+                let src_total = sim.pressure_curr[src];
+                if src_total <= 0.0 {
+                    continue;
+                }
+
+                let max_amount = src_total * grid.max_flow_fraction;
+                let transfer = amount.min(max_amount);
+                if transfer <= 0.0 {
+                    continue;
+                }
+
+                for gas_i in 0..sim.gas_count {
+                    let k_src = sim.idx(gas_i, src);
+                    let k_dst = sim.idx(gas_i, dst);
+                    let frac = sim.curr_moles[k_src] / src_total;
+                    let delta = transfer * frac;
+                    sim.next_moles[k_src] -= delta;
+                    sim.next_moles[k_dst] += delta;
+                }
+            }
+        }
+    }
+
+    if h > 1 {
+        for y in 0..(h - 1) {
+            for x in 0..w {
+                let flux = sim.flux_y[sim.flux_y_index(x, y)];
+                let (src_y, dst_y, amount) = if flux >= 0.0 {
+                    (y, y + 1, flux * dt)
+                } else {
+                    (y + 1, y, -flux * dt)
+                };
+
+                let src = sim.cell_index(x, src_y);
+                let dst = sim.cell_index(x, dst_y);
+                let src_total = sim.pressure_curr[src];
+                if src_total <= 0.0 {
+                    continue;
+                }
+
+                let max_amount = src_total * grid.max_flow_fraction;
+                let transfer = amount.min(max_amount);
+                if transfer <= 0.0 {
+                    continue;
+                }
+
+                for gas_i in 0..sim.gas_count {
+                    let k_src = sim.idx(gas_i, src);
+                    let k_dst = sim.idx(gas_i, dst);
+                    let frac = sim.curr_moles[k_src] / src_total;
+                    let delta = transfer * frac;
+                    sim.next_moles[k_src] -= delta;
+                    sim.next_moles[k_dst] += delta;
+                }
+            }
+        }
+    }
+
+    // curr <-> next (advection result becomes current)
+    let curr = std::mem::take(&mut sim.curr_moles);
+    sim.curr_moles = std::mem::replace(&mut sim.next_moles, curr);
 
     // Diffuse each gas independently (mixing is emergent from diffusion of moles).
     for gas_i in 0..sim.gas_count {

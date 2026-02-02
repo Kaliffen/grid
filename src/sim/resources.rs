@@ -112,6 +112,12 @@ pub struct GridSettings {
     /// Optional global scalar multiplier on diffusion coefficient.
     /// Final alpha used: gas.diffusion_alpha * global_alpha
     pub global_alpha: f32,
+
+    /// Bulk-flow permeability constant for pressure-driven advection.
+    pub bulk_flow_k: f32,
+
+    /// Max fraction of a cell's total moles that can move across a face per step.
+    pub max_flow_fraction: f32,
 }
 
 impl Default for GridSettings {
@@ -120,6 +126,8 @@ impl Default for GridSettings {
             width: 32,
             height: 32,
             global_alpha: 1.0,
+            bulk_flow_k: 0.4,
+            max_flow_fraction: 0.25,
         }
     }
 }
@@ -131,7 +139,9 @@ pub struct GasCatalog {
 
 impl Default for GasCatalog {
     fn default() -> Self {
-        Self { gases: GasDef::defaults() }
+        Self {
+            gases: GasDef::defaults(),
+        }
     }
 }
 
@@ -152,12 +162,19 @@ pub(crate) struct PressureSimState {
 
     // step buffer
     pub(crate) next_moles: Vec<f32>,
+
+    // derived pressure and bulk-flow fluxes
+    pub(crate) pressure_curr: Vec<f32>,
+    pub(crate) flux_x: Vec<f32>,
+    pub(crate) flux_y: Vec<f32>,
 }
 
 impl PressureSimState {
     pub(crate) fn new(width: u32, height: u32, gas_count: usize) -> Self {
         let cell_count = (width * height) as usize;
         let total_len = gas_count * cell_count;
+        let flux_x_len = ((width - 1) * height) as usize;
+        let flux_y_len = (width * (height - 1)) as usize;
 
         Self {
             tick: 0,
@@ -168,6 +185,9 @@ impl PressureSimState {
             prev_moles: vec![0.0; total_len],
             curr_moles: vec![0.0; total_len],
             next_moles: vec![0.0; total_len],
+            pressure_curr: vec![0.0; cell_count],
+            flux_x: vec![0.0; flux_x_len],
+            flux_y: vec![0.0; flux_y_len],
         }
     }
 
@@ -190,6 +210,16 @@ impl PressureSimState {
     pub(crate) fn write_next(&mut self, gas_i: usize, cell_i: usize, v: f32) {
         let k = self.idx(gas_i, cell_i);
         self.next_moles[k] = v;
+    }
+
+    #[inline]
+    pub(crate) fn flux_x_index(&self, x: u32, y: u32) -> usize {
+        (y * (self.width - 1) + x) as usize
+    }
+
+    #[inline]
+    pub(crate) fn flux_y_index(&self, x: u32, y: u32) -> usize {
+        (y * self.width + x) as usize
     }
 }
 

@@ -194,7 +194,7 @@ pub(crate) fn update_heatmap_texture(
                 data.resize(needed, 0);
             }
 
-            data[base]     = (rgb.x * 255.0) as u8;
+            data[base] = (rgb.x * 255.0) as u8;
             data[base + 1] = (rgb.y * 255.0) as u8;
             data[base + 2] = (rgb.z * 255.0) as u8;
             data[base + 3] = 255;
