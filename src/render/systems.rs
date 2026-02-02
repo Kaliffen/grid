@@ -216,10 +216,6 @@ pub(crate) fn update_heatmap_texture(
         return;
     };
 
-    let min_p = heatmap.min_pressure;
-    let max_p = heatmap.max_pressure.max(min_p + f32::EPSILON);
-    let inv_range = 1.0 / (max_p - min_p);
-
     let width = heatmap.width as usize;
     let height = heatmap.height as usize;
     let expected_len = width * height * 4;
@@ -228,22 +224,19 @@ pub(crate) fn update_heatmap_texture(
         data.resize(expected_len, 0);
     }
 
-    let max_wind = presented
+    let wind_floor = grid.wind_visual_min_speed.max(0.0);
+    let wind_scale = presented
         .max_wind_speed
-        .max(grid.wind_visual_min_speed)
-        .max(f32::EPSILON);
-    let inv_wind = 1.0 / max_wind;
+        .max(wind_floor + f32::EPSILON);
 
     for y in 0..height {
         for x in 0..width {
             let cell_i = y * width + x;
             let pressure = presented.pressure[cell_i];
-            let mut t = (pressure - min_p) * inv_range;
-            t = t.clamp(0.0, 1.0);
 
-            let pressure_color = pressure_ramp(t);
+            let pressure_color = pressure_ramp_atm(pressure);
             let wind = presented.wind[cell_i];
-            let wind_color = wind_ramp(wind, inv_wind);
+            let wind_color = wind_ramp(wind, wind_floor, wind_scale);
 
             let rgb = match *overlay {
                 OverlayMode::Pressure => pressure_color,
@@ -262,24 +255,50 @@ pub(crate) fn update_heatmap_texture(
     }
 }
 
+const ATM_PA: f32 = 101_325.0;
+
 #[inline]
-fn pressure_ramp(t: f32) -> Vec3 {
-    let low = Vec3::new(0.05, 0.05, 0.3);
-    let high = Vec3::new(1.0, 0.2, 0.1);
-    low.lerp(high, t)
+fn pressure_ramp_atm(pressure_pa: f32) -> Vec3 {
+    let atm = (pressure_pa / ATM_PA).max(0.0);
+
+    let vacuum = Vec3::new(0.0, 0.0, 0.0);
+    let low = Vec3::new(0.05, 0.1, 0.6);
+    let normal = Vec3::new(0.1, 0.8, 0.2);
+    let high = Vec3::new(0.95, 0.5, 0.1);
+    let danger = Vec3::new(0.9, 0.05, 0.05);
+
+    let t = |value: f32, start: f32, end: f32| ((value - start) / (end - start)).clamp(0.0, 1.0);
+
+    if atm <= 0.05 {
+        vacuum.lerp(low, t(atm, 0.0, 0.05))
+    } else if atm <= 1.0 {
+        low.lerp(normal, t(atm, 0.05, 1.0))
+    } else if atm <= 3.0 {
+        normal.lerp(high, t(atm, 1.0, 3.0))
+    } else if atm <= 10.0 {
+        high.lerp(danger, t(atm, 3.0, 10.0))
+    } else {
+        danger
+    }
 }
 
 #[inline]
-fn wind_ramp(wind: Vec2, inv_wind: f32) -> Vec3 {
-    let mag = (wind.length() * inv_wind).clamp(0.0, 1.0);
-    if mag <= 0.0 {
+fn wind_ramp(wind: Vec2, floor: f32, scale: f32) -> Vec3 {
+    let mag = wind.length();
+    if mag <= floor {
+        return Vec3::ZERO;
+    }
+
+    let denom = (scale - floor).max(f32::EPSILON);
+    let normalized = ((mag - floor) / denom).clamp(0.0, 1.0);
+    if normalized <= 0.0 {
         return Vec3::ZERO;
     }
 
     let angle = wind.y.atan2(wind.x);
     let hue = ((angle / std::f32::consts::TAU) + 1.0) % 1.0;
     let sat = 0.85;
-    let val = 0.15 + 0.85 * mag;
+    let val = 0.1 + 0.9 * normalized;
     hsv_to_rgb(hue, sat, val)
 }
 
