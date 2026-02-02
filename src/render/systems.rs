@@ -67,7 +67,7 @@ pub(crate) struct VizLabel;
 pub(crate) struct HeatmapSprite;
 
 #[derive(Default)]
-struct UiState {
+pub(crate) struct UiState {
     last_tick: u64,
     last_selected: SelectedCell,
 }
