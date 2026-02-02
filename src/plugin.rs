@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_asset::render_asset::RenderAssetUsages;
+use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::image::ImageSampler;
 use std::time::Instant;
