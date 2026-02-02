@@ -84,7 +84,7 @@ pub(crate) fn advance_diffusion_fixed(
     mut sim: ResMut<PressureSimState>,
 ) {
     // Copy curr -> prev (for interpolation)
-    sim.prev_moles.copy_from_slice(&sim.curr_moles);
+    sim.prev_moles.clone_from(&sim.curr_moles);
 
     sim.tick += 1;
 
