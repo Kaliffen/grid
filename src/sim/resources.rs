@@ -232,6 +232,8 @@ pub struct PressurePresented {
     pub width: u32,
     pub height: u32,
     pub pressure: Vec<f32>,
+    pub wind: Vec<Vec2>,
+    pub max_wind_speed: f32,
     // optional: also expose a single cell composition for UI (center cell)
     pub center_total_moles: f32,
     pub center_gas_fractions: Vec<f32>, // length gas_count
@@ -245,6 +247,8 @@ impl PressurePresented {
             width,
             height,
             pressure: vec![0.0; cell_count],
+            wind: vec![Vec2::ZERO; cell_count],
+            max_wind_speed: 0.0,
             center_total_moles: 0.0,
             center_gas_fractions: vec![0.0; gas_count],
         }

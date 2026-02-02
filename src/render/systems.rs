@@ -29,6 +29,31 @@ pub(crate) struct HeatmapViz {
     last_tick: u64,
 }
 
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverlayMode {
+    Pressure,
+    Wind,
+    Both,
+}
+
+impl OverlayMode {
+    fn next(self) -> Self {
+        match self {
+            OverlayMode::Pressure => OverlayMode::Wind,
+            OverlayMode::Wind => OverlayMode::Both,
+            OverlayMode::Both => OverlayMode::Pressure,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            OverlayMode::Pressure => "pressure",
+            OverlayMode::Wind => "wind",
+            OverlayMode::Both => "both",
+        }
+    }
+}
+
 // ------------------------------------
 // UI
 // ------------------------------------
@@ -94,6 +119,7 @@ pub(crate) fn setup_render(
         max_pressure: 20.0,
         last_tick: 0,
     });
+    commands.insert_resource(OverlayMode::Pressure);
     commands.insert_resource(RenderDiag::default());
 }
 
@@ -104,6 +130,7 @@ pub(crate) fn setup_render(
 pub(crate) fn update_ui(
     gases: Res<GasCatalog>,
     presented: Res<PressurePresented>,
+    overlay: Res<OverlayMode>,
     mut q: Query<&mut Text, With<VizLabel>>,
     mut last_tick: Local<u64>,
 ) {
@@ -142,8 +169,11 @@ pub(crate) fn update_ui(
 
     if let Ok(mut text) = q.single_mut() {
         *text = Text::new(format!(
-            "tick: {}\ncenter total moles (pressure proxy): {:.6}\ncenter mix: {}",
-            presented.tick, presented.center_total_moles, comp
+            "tick: {}\ncenter total moles (pressure proxy): {:.6}\ncenter mix: {}\noverlay: {} (space cycle, 1 pressure, 2 wind, 3 both)",
+            presented.tick,
+            presented.center_total_moles,
+            comp,
+            overlay.label(),
         ));
     }
 }
@@ -152,9 +182,28 @@ pub(crate) fn update_ui(
 // Heatmap rendering: Update
 // ------------------------------------
 
+pub(crate) fn update_overlay_mode_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut overlay: ResMut<OverlayMode>,
+) {
+    if keys.just_pressed(KeyCode::Space) {
+        *overlay = overlay.next();
+    }
+    if keys.just_pressed(KeyCode::Digit1) {
+        *overlay = OverlayMode::Pressure;
+    }
+    if keys.just_pressed(KeyCode::Digit2) {
+        *overlay = OverlayMode::Wind;
+    }
+    if keys.just_pressed(KeyCode::Digit3) {
+        *overlay = OverlayMode::Both;
+    }
+}
+
 pub(crate) fn update_heatmap_texture(
     presented: Res<PressurePresented>,
     mut heatmap: ResMut<HeatmapViz>,
+    overlay: Res<OverlayMode>,
     mut images: ResMut<Assets<Image>>,
 ) {
     if presented.tick == heatmap.last_tick {
@@ -173,6 +222,13 @@ pub(crate) fn update_heatmap_texture(
     let width = heatmap.width as usize;
     let height = heatmap.height as usize;
     let data = &mut image.data;
+    let expected_len = width * height * 4;
+    if data.len() != expected_len {
+        data.resize(expected_len, 0);
+    }
+
+    let max_wind = presented.max_wind_speed.max(f32::EPSILON);
+    let inv_wind = 1.0 / max_wind;
 
     for y in 0..height {
         for x in 0..width {
@@ -181,24 +237,83 @@ pub(crate) fn update_heatmap_texture(
             let mut t = (pressure - min_p) * inv_range;
             t = t.clamp(0.0, 1.0);
 
-            let low = Vec3::new(0.05, 0.05, 0.3);
-            let high = Vec3::new(1.0, 0.2, 0.1);
-            let rgb = low.lerp(high, t);
+            let pressure_color = pressure_ramp(t);
+            let wind = presented.wind[cell_i];
+            let wind_color = wind_ramp(wind, inv_wind);
+
+            let rgb = match *overlay {
+                OverlayMode::Pressure => pressure_color,
+                OverlayMode::Wind => wind_color,
+                OverlayMode::Both => pressure_color.lerp(wind_color, 0.5),
+            };
+
+            let rgb = linear_to_srgb(rgb);
 
             let base = cell_i * 4;
-            let data = data.get_or_insert_with(Vec::new);
-
-            // ensure it is large enough (example; pick correct size)
-            let needed = base + 4;
-            if data.len() < needed {
-                data.resize(needed, 0);
-            }
-
             data[base] = (rgb.x * 255.0) as u8;
             data[base + 1] = (rgb.y * 255.0) as u8;
             data[base + 2] = (rgb.z * 255.0) as u8;
             data[base + 3] = 255;
         }
+    }
+}
+
+#[inline]
+fn pressure_ramp(t: f32) -> Vec3 {
+    let low = Vec3::new(0.05, 0.05, 0.3);
+    let high = Vec3::new(1.0, 0.2, 0.1);
+    low.lerp(high, t)
+}
+
+#[inline]
+fn wind_ramp(wind: Vec2, inv_wind: f32) -> Vec3 {
+    let mag = (wind.length() * inv_wind).clamp(0.0, 1.0);
+    if mag <= 0.0 {
+        return Vec3::ZERO;
+    }
+
+    let angle = wind.y.atan2(wind.x);
+    let hue = ((angle / std::f32::consts::TAU) + 1.0) % 1.0;
+    let sat = 0.85;
+    let val = 0.15 + 0.85 * mag;
+    hsv_to_rgb(hue, sat, val)
+}
+
+#[inline]
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Vec3 {
+    let h = (h * 6.0).rem_euclid(6.0);
+    let i = h.floor();
+    let f = h - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+
+    match i as i32 {
+        0 => Vec3::new(v, t, p),
+        1 => Vec3::new(q, v, p),
+        2 => Vec3::new(p, v, t),
+        3 => Vec3::new(p, q, v),
+        4 => Vec3::new(t, p, v),
+        _ => Vec3::new(v, p, q),
+    }
+}
+
+#[inline]
+fn linear_to_srgb(rgb: Vec3) -> Vec3 {
+    Vec3::new(
+        linear_channel_to_srgb(rgb.x),
+        linear_channel_to_srgb(rgb.y),
+        linear_channel_to_srgb(rgb.z),
+    )
+}
+
+#[inline]
+fn linear_channel_to_srgb(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    if x <= 0.003_130_8 {
+        12.92 * x
+    } else {
+        1.055 * x.powf(1.0 / 2.4) - 0.055
     }
 }
 
