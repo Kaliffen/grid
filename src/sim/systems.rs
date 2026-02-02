@@ -56,7 +56,7 @@ pub(crate) fn setup_sim(mut commands: Commands, grid: Res<GridSettings>, gases: 
 
     if let Some(i) = o2_i {
         let k = sim.idx(i, c);
-        sim.curr_moles[k] = 10.0;
+        sim.curr_moles[k] = 1240.0;
     }
     if let Some(i) = ch4_i {
         let k = sim.idx(i, c);
@@ -84,14 +84,16 @@ pub(crate) fn advance_diffusion_fixed(
     mut sim: ResMut<PressureSimState>,
 ) {
     // Copy curr -> prev (for interpolation)
-    sim.prev_moles.clone_from(&sim.curr_moles);
+    let curr = sim.curr_moles.clone();
+    sim.prev_moles.resize(curr.len(), 0.0);
+    sim.prev_moles.copy_from_slice(&curr);
 
     sim.tick += 1;
 
     let dt = fixed_time.delta_secs();
     let w = sim.width;
     let h = sim.height;
-    let cell_count = sim.cell_count;
+    let cell_count = sim.cell_count; 
     let gas_count = sim.gas_count;
     let width_usize = w as usize;
     let height_usize = h as usize;
@@ -189,7 +191,7 @@ pub(crate) fn advance_diffusion_fixed(
         )
     };
 
-    next_moles.clone_from(curr_moles);
+    next_moles.clone_from_slice(curr_moles);
 
     let mut outgoing = vec![0.0_f32; cell_count];
     if w > 1 {
