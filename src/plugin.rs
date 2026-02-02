@@ -383,11 +383,10 @@ fn setup(
     image.sampler = ImageSampler::nearest();
     let image_handle = images.add(image);
 
-    commands.spawn(SpriteBundle {
-        texture: image_handle.clone(),
-        transform: Transform::from_scale(Vec3::splat(scale)),
-        ..default()
-    });
+    commands.spawn((
+        Sprite::from_image(image_handle.clone()),
+        Transform::from_scale(Vec3::splat(scale)),
+    ));
 
     commands.insert_resource(sim);
     commands.insert_resource(presented);
