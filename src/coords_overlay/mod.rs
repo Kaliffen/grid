@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::mesh::Mesh2d;
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dPlugin};
-use bevy::sprite_render::{Mesh2d, MeshMaterial2d};
+use bevy::sprite_render::MeshMaterial2d;
 use bevy::reflect::TypePath;
 
 const GRID_SHADER_PATH: &str = "shaders/coords_overlay.wgsl";
@@ -108,7 +109,7 @@ impl Material2d for CoordGridMaterial {
     }
 
     fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Premultiplied
+        AlphaMode2d::Blend
     }
 }
 
@@ -227,12 +228,13 @@ fn update_grid_globals(
     params: Res<GridBehaviorParams>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
 ) {
-    let Ok((camera, camera_transform)) = cameras.get_single() else {
+    let Ok((camera, camera_transform)) = cameras.single() else {
         return;
     };
 
-    let Some(viewport_size) = camera.logical_viewport_size() else {
-        return;
+    let viewport_size: Vec2 = match camera.logical_viewport_size() {
+        Some(size) => size,
+        None => return,
     };
 
     let center = viewport_size * 0.5;
