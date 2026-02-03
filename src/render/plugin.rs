@@ -12,7 +12,7 @@ impl Plugin for PressureRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_render.after(setup_sim))
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     update_overlay_mode_input,
                     update_selected_tile_input,
