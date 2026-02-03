@@ -1,0 +1,210 @@
+DOCUMENT 2 — Bevy 0.18.0 Shader-Based Design (Ready for Code Generation)
+(Instanced procedural grid for up to 2048 rotated coordinate frames; implements Document 1 behavior.)
+
+GOAL
+Render many independent 2D coordinate frames (position + rotation) with a professional grid:
+- stable density under zoom
+- nice-number major steps
+- minor subdivisions with smooth fade
+- origin-anchored lines
+- axis-dominant rendering
+Achieve this with a custom shader + instancing (single draw for all visible frames).
+
+A) DATA MODEL (ECS)
+
+1) Components
+- CoordFrame2D
+  - half_extent_local: Vec2
+    * Local half size of the rectangular region where the grid is visible.
+    * The unit quad will be scaled to this region in local space.
+  - style:
+    - axis_color_x: Vec4
+    - axis_color_y: Vec4
+    - major_color: Vec4
+    - minor_color: Vec4
+    - axis_thickness_px: f32
+    - major_thickness_px: f32
+    - minor_thickness_px: f32
+    - axis_opacity: f32 (typically 1)
+    - major_opacity: f32 (e.g. 0.5)
+    - minor_opacity: f32 (e.g. 0.25)
+  - flags: u32 bitfield
+    - SHOW_GRID
+    - SHOW_AXES
+    - AXES_ONLY (optional: set by culling heuristics)
+    - SELECTED (optional: for later)
+
+- Transform (built-in)
+  - translation + rotation (uniform scale optional; recommended to keep grid math consistent)
+
+2) Resources
+- GridBehaviorParams (authoring constants)
+  - target_major_px: f32 (e.g. 100)
+  - major_band_min_px: f32 (e.g. 80)
+  - major_band_max_px: f32 (e.g. 140)
+  - nice_mantissas: [f32; 3] = [1,2,5]
+  - minor_subdivisions: f32 = 5.0
+  - minor_fade_out_px: f32 (e.g. 4)
+  - minor_fade_in_px: f32 (e.g. 12)
+  - frame_screen_cull_px: f32 (e.g. 40) (optional)
+
+- GridGlobals (computed each frame; uploaded to GPU as uniform)
+  - ppu: f32
+  - major_step_world: f32 (= step)
+  - minor_step_world: f32 (= substep = step / 5)
+  - alpha_minor_global: f32 (computed from minor_step_world * ppu via fade rule)
+  - (optional) camera matrices if needed by pipeline; for 2D you usually rely on standard bevy transforms
+
+B) GRID SPACING SELECTION (CPU, ONCE PER FRAME)
+
+System: compute_camera_ppu
+- Input: active Camera2d + Window size.
+- Output: GridGlobals.ppu
+- For orthographic 2D camera:
+  - ppu derived from projection scale and window dimensions.
+  - (Exact formula depends on camera projection config; compute from world units visible per screen pixel.)
+
+System: choose_nice_major_step
+- Input: GridBehaviorParams, GridGlobals.ppu
+- Steps:
+  1) desired_major = target_major_px / ppu
+  2) choose step from {m * 10^n} with m in [1,2,5] minimizing |log(desired_major) - log(candidate)|
+  3) enforce band:
+     - while step*ppu < major_band_min_px: step = next_larger_nice(step)
+     - while step*ppu > major_band_max_px: step = next_smaller_nice(step)
+  4) substep = step / minor_subdivisions
+  5) alpha_minor_global:
+     - substep_px = substep * ppu
+     - if substep_px <= minor_fade_out_px: 0
+     - else if substep_px >= minor_fade_in_px: 1
+     - else: (substep_px - minor_fade_out_px)/(minor_fade_in_px - minor_fade_out_px)
+- Output: GridGlobals.major_step_world, GridGlobals.minor_step_world, GridGlobals.alpha_minor_global
+
+Note: This is global and shared by all frames for consistent reading.
+
+C) RENDERING TECHNIQUE (ONE INSTANCED DRAW)
+
+1) Geometry
+- Create one Mesh: unit quad with positions in local space [-1..1]^2.
+- UVs optional; not required.
+
+2) Custom Material2D (Bevy 0.18)
+- Define a custom Material2d type providing:
+  - a uniform buffer binding for GridGlobals
+  - an instance buffer binding (or instance vertex attributes) for per-frame data
+
+3) Per-instance GPU data (packed)
+For each visible CoordFrame2D entity, write one instance record:
+- world_from_local_2x3 (affine 2D transform to world):
+  - [ r00 r01 tx
+      r10 r11 ty ]
+  (If you allow scale, include it in r00..r11.)
+- half_extent_local: Vec2
+- colors: axis_color_x, axis_color_y, major_color, minor_color
+- thickness_px: axis, major, minor
+- opacities: axis_opacity, major_opacity, minor_opacity
+- flags: u32
+
+4) Visibility + culling (CPU)
+System: collect_visible_frames
+- Compute camera visible world rect (AABB).
+- For each frame:
+  - compute conservative world AABB of the frame rectangle from transform + half_extent_local.
+  - if outside camera rect: skip
+  - optional screen-size heuristic:
+     - estimate projected size in pixels = (2*max(half_extent_world))*ppu
+     - if below frame_screen_cull_px: set AXES_ONLY or skip
+- Write packed instances to GPU buffer (max 2048).
+
+D) SHADER LOGIC (WGSL) — PROCEDURAL GRID LINES
+
+Inputs to fragment:
+- p_local: Vec2 position within frame local coordinates (after scaling quad by half_extent_local)
+- instance style data + flags
+- GridGlobals: ppu, major_step_world, minor_step_world, alpha_minor_global
+
+1) Mask
+- Because the quad already bounds the frame, mask is implicit.
+- (Optional) if you want soft edges, compute distance to local bounds and fade.
+
+2) Pixel-constant thickness and AA
+- Convert pixel thickness to world thickness:
+  - axis_th_w = axis_thickness_px / ppu
+  - major_th_w = major_thickness_px / ppu
+  - minor_th_w = minor_thickness_px / ppu
+- Use derivative-based AA:
+  - aa_x = fwidth(signed_distance) (or fwidth of normalized distance)
+  - coverage = smoothstep(th_w + aa, th_w - aa, dist)
+
+3) Distance-to-line functions (origin-anchored)
+Axes:
+- dist_axis_x = abs(p_local.y)   (line y=0)
+- dist_axis_y = abs(p_local.x)   (line x=0)
+
+Major grid:
+- step = major_step_world
+- dx_major = abs(fract(p_local.x / step) - 0.5) * step
+- dy_major = abs(fract(p_local.y / step) - 0.5) * step
+- dist_major = min(dx_major, dy_major)
+
+Minor grid:
+- sub = minor_step_world
+- dx_minor = abs(fract(p_local.x / sub) - 0.5) * sub
+- dy_minor = abs(fract(p_local.y / sub) - 0.5) * sub
+- dist_minor = min(dx_minor, dy_minor)
+
+IMPORTANT: This formulation anchors to local origin (0,0) and repeats every step/substep.
+No additional phase offsets are applied. Rotation is handled by the instance transform.
+
+4) Coverage + alpha composition (axis-dominant)
+Compute coverages with AA:
+- cov_axis_x, cov_axis_y from dist_axis_x/y and axis_th_w
+- cov_major from dist_major and major_th_w
+- cov_minor from dist_minor and minor_th_w
+
+Apply visibility rules:
+- if AXES_ONLY: disable major/minor
+- if SHOW_GRID not set: disable major/minor
+- if SHOW_AXES not set: disable axes
+
+Apply opacities:
+- major_alpha = major_opacity
+- minor_alpha = minor_opacity * alpha_minor_global
+- axis_alpha  = axis_opacity
+
+Axis dominance rule:
+- compose in this order (bottom → top):
+  1) minor
+  2) major
+  3) axes (x and y), with axes overriding where they overlap
+
+Practical compositing:
+- Start with transparent color.
+- Blend minor, then major.
+- For axes, either:
+  - alpha-over on top, OR
+  - max coverage dominance (axis coverage takes precedence).
+Axis dominance requirement: ensure the final pixel at x=0 or y=0 reads as axis, not grid.
+
+Use premultiplied alpha blending for stable results.
+
+E) Z-ORDER / RENDER ORDER
+- Render all grids in one pipeline. Within the fragment, axes are composed last, so they appear “on top” of grid within each instance.
+- Between different frames: if overlap matters, provide a stable sort key:
+  - e.g. per-entity z in Transform, or a render phase sort field, or just accept painter’s order if overlap is rare.
+
+F) RESULTING ZOOM BEHAVIOR (TIES DIRECTLY TO DOCUMENT 1)
+- Each frame uses the global step/substep derived from ppu and nice numbers.
+- As zoom changes:
+  - step switches among {1,2,5}×10^n only when step_px leaves [80..140].
+  - substep is step/5 always.
+  - minor visibility fades smoothly based on substep_px thresholds.
+- Grid lines remain anchored to each frame’s local origin (0,0), rigidly rotated/translated with the frame.
+- Axes remain visible and dominant at all zoom levels.
+
+G) TEST CASES (acceptance criteria)
+1) Pan camera: grid does not “swim” relative to any frame.
+2) Zoom in/out slowly: density stays stable; minors fade, no harsh popping.
+3) Rotate a frame: its grid rotates rigidly and remains origin-anchored.
+4) 2048 frames: single instanced draw; CPU cost bounded by culling + buffer upload.
+5) Axis dominance: x=0 and y=0 always read clearly even where gridlines overlap.

@@ -1,0 +1,74 @@
+DOCUMENT 1 — Professional Graph Grid Behavior (Single 2D Coordinate System, 2048 Instances)
+
+SCOPE
+- We render up to 2048 independent 2D coordinate frames.
+- Each frame has a local (x,y) plane with origin (0,0), plus a rigid transform to world (translation + rotation; optional uniform scale).
+- Each frame renders the SAME grid behavior; differences are only their transform and per-frame styling/extent.
+- The camera zoom defines pixels-per-world-unit (ppu). Grid density is screen-space driven, not fixed world spacing.
+
+DEFINITIONS
+- ppu: pixels per world unit at the grid plane for the active camera.
+- target_major_px: desired screen spacing for major lines (e.g. 100 px).
+- major_band_px: acceptable band for major spacing (e.g. [80, 140] px).
+- nice set: {1, 2, 5} × 10^n for integer n (… 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, …).
+- step: major spacing in WORLD units, selected from the nice set.
+- substep: minor spacing in WORLD units, derived from step (default = step / 5).
+- step_px = step * ppu; substep_px = substep * ppu.
+- fade thresholds for minor lines: minor_fade_out_px <= substep_px <= minor_fade_in_px (e.g. 4..12 px).
+
+GLOBAL SELECTION RULE (APPLIES TO ALL FRAMES)
+1) Compute ppu from camera.
+2) Compute desired_major_world = target_major_px / ppu.
+3) Select step from nice set to be the closest to desired_major_world, then enforce band:
+   - while step_px < major_band_px.min: step = next_larger_nice(step)
+   - while step_px > major_band_px.max: step = next_smaller_nice(step)
+   (This ensures major spacing is stable in pixels.)
+4) Define substep = step / 5 (fixed subdivision count = 5).
+   (This is the ONLY subdivision system: majors + minors + axes; no additional LOD layers.)
+
+VISIBILITY + OPACITY (SMOOTH TRANSITIONS, NO POPPING)
+- Major lines are always drawn (unless the entire frame is culled).
+- Minor lines are drawn with a continuous fade based on substep_px:
+  - if substep_px <= minor_fade_out_px: alpha_minor = 0
+  - if substep_px >= minor_fade_in_px: alpha_minor = 1
+  - else: alpha_minor = (substep_px - minor_fade_out_px) / (minor_fade_in_px - minor_fade_out_px)
+- Optional (not required): slight dimming of majors at extreme zoom-out if step_px becomes very large, but majors remain present.
+
+ANCHORING (NO SWIMMING)
+- Grid lines are anchored to the frame’s LOCAL origin. They never change phase relative to (0,0).
+- For each frame:
+  - Major vertical lines at x = m * step for all integers m.
+  - Major horizontal lines at y = n * step for all integers n.
+  - Minor vertical lines at x = m * substep for all integers m.
+  - Minor horizontal lines at y = n * substep for all integers n.
+- These line positions are defined in local space, then transformed to world by the frame transform.
+- Camera panning does not shift the grid relative to the frame; camera zoom only changes step/substep choice and minor alpha.
+
+AXES (AXIS-DOMINANT)
+- Axes are special and always present:
+  - X axis: y = 0 in local space
+  - Y axis: x = 0 in local space
+- Axes render on top of majors/minors.
+- At overlaps (e.g. the grid line at x=0), axis style overrides grid style (axis wins).
+- Axes have stronger visual weight (thicker, higher opacity, distinct colors). Thickness is screen-space constant (pixel constant).
+
+LINE THICKNESS (PIXEL-CONSTANT)
+- Axis thickness specified in pixels (e.g. 2.5 px).
+- Major thickness specified in pixels (e.g. 1.2 px).
+- Minor thickness specified in pixels (e.g. 1.0 px), multiplied by alpha_minor.
+- Thickness remains constant in screen-space across zoom; anti-aliasing uses derivative-based smoothing.
+
+ZOOM EVOLUTION (EXACT BEHAVIOR)
+- As you zoom IN (ppu increases):
+  - step_px increases until it would exceed major_band_px.max, then step is replaced by the next smaller nice value.
+  - This keeps major spacing roughly constant in pixels (stable density).
+  - Minor lines remain visible (typically fully visible) and provide continuity across step changes.
+- As you zoom OUT (ppu decreases):
+  - substep_px shrinks; minors fade out smoothly before they would become clutter.
+  - step increases to the next larger nice value when step_px would fall below major_band_px.min.
+- Result: bounded visible line density, nice-number steps, smooth transitions.
+
+PER-FRAME EXTENT + CULLING
+- Each frame is rendered only inside its own bounded region (e.g. a local rectangle of half_extent_world).
+- Entire frames can be culled if off-screen.
+- Optional screen-size cull: if a frame’s projected size < threshold (e.g. < 40 px), render axes only or skip (implementation choice) to control fill-rate.
