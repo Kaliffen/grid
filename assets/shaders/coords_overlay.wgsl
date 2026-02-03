@@ -19,10 +19,10 @@ struct GridGlobals {
     alpha_minor_global: f32,
 }
 
-@group(1) @binding(0)
+@group(2) @binding(0)
 var<uniform> style: GridStyle;
 
-@group(1) @binding(1)
+@group(2) @binding(1)
 var<uniform> globals: GridGlobals;
 
 const SHOW_GRID: u32 = 1u;

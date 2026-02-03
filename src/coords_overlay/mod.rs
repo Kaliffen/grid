@@ -57,6 +57,7 @@ impl Default for GridStyle {
     }
 }
 
+#[allow(dead_code)]
 pub mod flags {
     pub const SHOW_GRID: u32 = 1 << 0;
     pub const SHOW_AXES: u32 = 1 << 1;
