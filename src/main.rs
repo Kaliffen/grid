@@ -3,6 +3,7 @@ use std::time::Duration;
 
 mod render;
 mod sim;
+mod main2;
 
 use render::PressureRenderPlugin;
 use sim::PressureSimPlugin;
